@@ -6,7 +6,7 @@ from ta.trend import MACD, EMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
-st.set_page_config(page_title="AI 股價預言家 (完整版)", layout="wide", page_icon="🔮")
+st.set_page_config(page_title="AI 股價預言家 (全能版)", layout="wide", page_icon="🔮")
 
 # ==========================================
 # 📋 監控清單
@@ -52,17 +52,19 @@ def calculate_metrics(ticker, df):
         curr_ma5 = ma_5.iloc[-1]
         curr_atr = atr.iloc[-1]
         curr_rsi = rsi.iloc[-1]
+        curr_ema20 = ema_20.iloc[-1]
+        curr_ema60 = ema_60.iloc[-1]
 
         # 評分
         trend_score = 0
         rebound_score = 0
         
-        if curr_price > ema_20.iloc[-1] > ema_60.iloc[-1]: trend_score += 40
-        elif curr_price > ema_60.iloc[-1]: trend_score += 20
+        if curr_price > curr_ema20 > curr_ema60: trend_score += 40
+        elif curr_price > curr_ema60: trend_score += 20
         if macd.macd().iloc[-1] > macd.macd_signal().iloc[-1]: trend_score += 20
         if 50 <= curr_rsi <= 75: trend_score += 20
         
-        bias = ((curr_price - ema_20.iloc[-1]) / ema_20.iloc[-1]) * 100
+        bias = ((curr_price - curr_ema20) / curr_ema20) * 100
         if curr_rsi < 30: rebound_score += 40
         elif curr_rsi < 40: rebound_score += 15
         if curr_price <= bb.bollinger_lband().iloc[-1]: rebound_score += 30
@@ -70,18 +72,43 @@ def calculate_metrics(ticker, df):
 
         total_score = trend_score + rebound_score
 
-        # --- 預測邏輯 ---
+        # --- 預測邏輯 (雙模式) ---
         recent_data = close.tail(20)
         x = np.arange(len(recent_data))
         y = recent_data.values
         slope, intercept = np.polyfit(x, y, 1)
         
+        pred_5_str = "-"
+        pred_10_str = "-"
+        pred_30_str = "-"
+        target_note = ""
+
         if slope > 0:
-            pred_5 = f"{curr_price + (slope * 5):.2f}"
-            pred_10 = f"{curr_price + (slope * 10):.2f}"
-            pred_30 = f"{curr_price + (slope * 30):.2f}"
-        else:
-            pred_5 = pred_10 = pred_30 = "-"
+            # 模式 A: 趨勢向上 -> 使用線性回歸預測
+            pred_5 = curr_price + (slope * 5)
+            pred_10 = curr_price + (slope * 10)
+            pred_30 = curr_price + (slope * 30)
+            pred_5_str = f"{pred_5:.2f}"
+            pred_10_str = f"{pred_10:.2f}"
+            pred_30_str = f"{pred_30:.2f}"
+            target_note = "趨勢推算"
+        
+        elif rebound_score >= 40:
+            # 模式 B: 趨勢向下但有抄底機會 -> 使用均線反彈預測
+            # 目標1: 反彈到月線 (MA20)
+            target_1 = curr_ema20
+            # 目標2: 反彈到季線 (MA60)
+            target_2 = curr_ema60
+            
+            # 如果現價離月線還很遠，5日目標先設為反彈 3%
+            if target_1 > curr_price * 1.05:
+                pred_5_str = f"{curr_price * 1.03:.2f}"
+            else:
+                pred_5_str = f"{target_1:.2f}" # 月線
+
+            pred_10_str = f"{target_1:.2f}" # 月線
+            pred_30_str = f"{target_2:.2f}" # 季線
+            target_note = "反彈目標"
 
         # --- 訊號判斷 ---
         action = "👀 觀望"
@@ -103,13 +130,14 @@ def calculate_metrics(ticker, df):
         return {
             "代號": ticker,
             "現價": round(curr_price, 2),
-            "總分": total_score,   # 新增分數
-            "RSI": round(curr_rsi, 1), # 新增 RSI
+            "總分": total_score,
+            "RSI": round(curr_rsi, 1),
             "🎯 建議入手": round(buy_price, 2) if buy_price > 0 else "-",
             "訊號": action,
-            "5日目標": pred_5,
-            "10日目標": pred_10,
-            "30日目標": pred_30,
+            "5日目標": pred_5_str,
+            "10日目標": pred_10_str,
+            "30日目標": pred_30_str,
+            "預測類型": target_note, # 標記是趨勢還是反彈
             "建議停損": round(stop_loss, 2),
             "_sort": total_score
         }
@@ -118,11 +146,11 @@ def calculate_metrics(ticker, df):
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("🔮 AI 股價預言家 (完整版)")
-st.caption("全覽監控：分數、RSI、預測價位一次看清。")
+st.title("🔮 AI 股價預言家 (全能版)")
+st.caption("支援「順勢預測」與「跌深反彈目標」計算。")
 
 if st.button("🔄 更新全市場數據", type="primary"):
-    with st.spinner('正在進行深度分析...'):
+    with st.spinner('AI 正在計算所有可能性...'):
         raw_data = fetch_all_data(DEFAULT_STOCKS)
         if raw_data is not None and not raw_data.empty:
             results = []
@@ -148,18 +176,19 @@ if st.button("🔄 更新全市場數據", type="primary"):
                     column_config={
                         "代號": st.column_config.TextColumn(width="small"),
                         "現價": st.column_config.NumberColumn(format="%.2f", width="small"),
-                        "總分": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100, width="small"), # 用進度條顯示分數
+                        "總分": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100, width="small"),
                         "RSI": st.column_config.NumberColumn(format="%.1f", width="small"),
                         "🎯 建議入手": st.column_config.TextColumn(help="觀望股顯示 -", width="medium"),
                         "訊號": st.column_config.TextColumn(width="medium"),
-                        # 把目標價縮小
+                        # 目標價欄位
+                        "預測類型": st.column_config.TextColumn(width="small", help="趨勢推算=看漲; 反彈目標=看反彈"),
                         "5日目標": st.column_config.TextColumn(width="small"),
                         "10日目標": st.column_config.TextColumn(width="small"),
                         "30日目標": st.column_config.TextColumn(width="small"),
-                        "建議停損": st.column_config.NumberColumn(format="%.2f", help="防守底線", width="small")
+                        "建議停損": st.column_config.NumberColumn(format="%.2f", width="small")
                     }
                 )
                 
-                st.success("✅ 更新完成！分數越高 (紅色進度條越長) 代表勝率越高。")
+                st.info("💡 說明：對於「抄底股」(3017等)，目標價是根據「均線壓力 (月線/季線)」計算的反彈目標。")
             else: st.info("無數據。")
         else: st.error("連線失敗")
