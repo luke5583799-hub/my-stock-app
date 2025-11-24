@@ -6,7 +6,7 @@ from ta.trend import MACD, EMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
-st.set_page_config(page_title="AI 股價預言家 (全覽版)", layout="wide", page_icon="🔮")
+st.set_page_config(page_title="AI 股價預言家 (完整版)", layout="wide", page_icon="🔮")
 
 # ==========================================
 # 📋 監控清單
@@ -68,24 +68,20 @@ def calculate_metrics(ticker, df):
         if curr_price <= bb.bollinger_lband().iloc[-1]: rebound_score += 30
         if bias < -7: rebound_score += 30
 
+        total_score = trend_score + rebound_score
+
         # --- 預測邏輯 ---
         recent_data = close.tail(20)
         x = np.arange(len(recent_data))
         y = recent_data.values
         slope, intercept = np.polyfit(x, y, 1)
         
-        # 只有趨勢向上才給目標價，不然給 "-"
         if slope > 0:
-            pred_5 = curr_price + (slope * 5)
-            pred_10 = curr_price + (slope * 10)
-            pred_30 = curr_price + (slope * 30)
-            target_5_str = f"{pred_5:.2f}"
-            target_10_str = f"{pred_10:.2f}"
-            target_30_str = f"{pred_30:.2f}"
+            pred_5 = f"{curr_price + (slope * 5):.2f}"
+            pred_10 = f"{curr_price + (slope * 10):.2f}"
+            pred_30 = f"{curr_price + (slope * 30):.2f}"
         else:
-            target_5_str = "-"
-            target_10_str = "-"
-            target_30_str = "-"
+            pred_5 = pred_10 = pred_30 = "-"
 
         # --- 訊號判斷 ---
         action = "👀 觀望"
@@ -107,58 +103,63 @@ def calculate_metrics(ticker, df):
         return {
             "代號": ticker,
             "現價": round(curr_price, 2),
-            "🎯 建議入手價": round(buy_price, 2) if buy_price > 0 else "-",
+            "總分": total_score,   # 新增分數
+            "RSI": round(curr_rsi, 1), # 新增 RSI
+            "🎯 建議入手": round(buy_price, 2) if buy_price > 0 else "-",
             "訊號": action,
-            "5日目標": target_5_str,
-            "10日目標": target_10_str,
-            "30日目標": target_30_str,
+            "5日目標": pred_5,
+            "10日目標": pred_10,
+            "30日目標": pred_30,
             "建議停損": round(stop_loss, 2),
-            "_sort": trend_score + rebound_score
+            "_sort": total_score
         }
     except: return None
 
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("🔮 AI 股價預言家 (全覽版)")
-st.caption("顯示所有監控中的股票，包含觀望股。")
+st.title("🔮 AI 股價預言家 (完整版)")
+st.caption("全覽監控：分數、RSI、預測價位一次看清。")
 
 if st.button("🔄 更新全市場數據", type="primary"):
-    with st.spinner('正在分析所有股票...'):
+    with st.spinner('正在進行深度分析...'):
         raw_data = fetch_all_data(DEFAULT_STOCKS)
         if raw_data is not None and not raw_data.empty:
             results = []
             for t in DEFAULT_STOCKS:
                 try:
                     res = calculate_metrics(t, raw_data[t])
-                    if res: results.append(res) # 不再過濾，全部顯示
+                    if res: results.append(res)
                 except: continue
             
             df = pd.DataFrame(results)
             if not df.empty:
-                # 排序：分數高的在上面
                 df = df.sort_values(by='_sort', ascending=False).drop(columns=['_sort'])
                 
                 def highlight(val):
                     if "強力" in val: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
                     if "偏多" in val: return 'background-color: #fff5e6; color: #d68910'
                     if "抄底" in val: return 'background-color: #e6fffa; color: #006666'
-                    return 'color: #999999' # 觀望變成灰色
+                    return 'color: #999999'
 
                 st.dataframe(
                     df.style.applymap(highlight, subset=['訊號']),
                     use_container_width=True,
                     column_config={
-                        "🎯 建議入手價": st.column_config.TextColumn(help="觀望股不建議入手，故顯示 -"),
-                        "5日目標": st.column_config.TextColumn(help="趨勢向下時顯示 -"),
-                        "建議停損": st.column_config.NumberColumn(format="%.2f", help="防守底線")
+                        "代號": st.column_config.TextColumn(width="small"),
+                        "現價": st.column_config.NumberColumn(format="%.2f", width="small"),
+                        "總分": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100, width="small"), # 用進度條顯示分數
+                        "RSI": st.column_config.NumberColumn(format="%.1f", width="small"),
+                        "🎯 建議入手": st.column_config.TextColumn(help="觀望股顯示 -", width="medium"),
+                        "訊號": st.column_config.TextColumn(width="medium"),
+                        # 把目標價縮小
+                        "5日目標": st.column_config.TextColumn(width="small"),
+                        "10日目標": st.column_config.TextColumn(width="small"),
+                        "30日目標": st.column_config.TextColumn(width="small"),
+                        "建議停損": st.column_config.NumberColumn(format="%.2f", help="防守底線", width="small")
                     }
                 )
                 
-                # 統計資訊
-                buy_num = len(df[df['訊號'].str.contains('買|多|抄')])
-                wait_num = len(df) - buy_num
-                st.info(f"📊 市場掃描完畢：可操作 {buy_num} 檔，建議觀望 {wait_num} 檔。")
-                
+                st.success("✅ 更新完成！分數越高 (紅色進度條越長) 代表勝率越高。")
             else: st.info("無數據。")
         else: st.error("連線失敗")
