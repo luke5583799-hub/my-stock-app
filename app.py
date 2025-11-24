@@ -1,11 +1,12 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 from ta.trend import MACD, EMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
-st.set_page_config(page_title="直接掛單助手", layout="wide", page_icon="💰")
+st.set_page_config(page_title="AI 股價預言家", layout="wide", page_icon="🔮")
 
 # ==========================================
 # 📋 監控清單
@@ -37,7 +38,7 @@ def calculate_metrics(ticker, df):
         high = df['High']
         low = df['Low']
 
-        # 指標
+        # 指標運算
         ema_20 = EMAIndicator(close=close, window=20).ema_indicator()
         ema_60 = EMAIndicator(close=close, window=60).ema_indicator()
         macd = MACD(close=close)
@@ -45,7 +46,7 @@ def calculate_metrics(ticker, df):
         bb = BollingerBands(close=close, window=20, window_dev=2)
         atr = AverageTrueRange(high=high, low=low, close=close).average_true_range()
         
-        # 計算 5日均線 (作為拉回買點)
+        # 計算 5日均線 (掛單用)
         ma_5 = close.rolling(window=5).mean()
 
         curr_price = close.iloc[-1]
@@ -53,7 +54,7 @@ def calculate_metrics(ticker, df):
         curr_atr = atr.iloc[-1]
         curr_rsi = rsi.iloc[-1]
 
-        # 評分
+        # --- 評分邏輯 ---
         trend_score = 0
         rebound_score = 0
         
@@ -68,38 +69,49 @@ def calculate_metrics(ticker, df):
         if curr_price <= bb.bollinger_lband().iloc[-1]: rebound_score += 30
         if bias < -7: rebound_score += 30
 
-        # --- 決定掛單價格 ---
+        # --- 📈 未來股價預測 (線性回歸 + 動能) ---
+        # 取最近 20 天的數據來計算「上漲斜率」
+        recent_data = close.tail(20)
+        x = np.arange(len(recent_data))
+        y = recent_data.values
+        # 用 polyfit 算出斜率 (slope) 和截距 (intercept)
+        slope, intercept = np.polyfit(x, y, 1)
+        
+        # 預測未來 (如果斜率是負的，代表在跌，就不要預測上漲目標)
+        if slope > 0:
+            pred_5 = curr_price + (slope * 5)
+            pred_10 = curr_price + (slope * 10)
+            pred_30 = curr_price + (slope * 30)
+        else:
+            # 如果是跌勢，目標價設為 0 (不顯示)
+            pred_5 = pred_10 = pred_30 = 0
+
+        # --- 決定掛單價格與訊號 ---
         action = "👀 觀望"
         buy_price = 0.0
-        note = ""
         
         if trend_score >= 80:
             action = "🔥 強力買進"
-            buy_price = curr_price # 強勢股直接市價買
-            note = "現價直接買"
+            buy_price = curr_price 
         elif trend_score >= 60:
             action = "🔴 偏多操作"
-            buy_price = curr_ma5   # 偏多股掛 5日線等它
-            note = f"掛 5日線 ({round(buy_price, 2)}) 等接"
-            # 如果現價已經低於 5日線，就直接用現價
-            if curr_price < buy_price:
-                buy_price = curr_price
-                note = "現價已低於5日線，可買"
+            buy_price = curr_ma5
+            if curr_price < buy_price: buy_price = curr_price
         elif rebound_score >= 60:
             action = "💎 嘗試抄底"
-            buy_price = curr_price # 抄底直接現價
-            note = "跌深反彈，現價買"
+            buy_price = curr_price
 
-        # 停損建議
         stop_loss = curr_price - (2 * curr_atr)
 
         return {
             "代號": ticker,
             "現價": round(curr_price, 2),
-            "🎯 建議入手價": round(buy_price, 2), # 重點欄位
-            "備註": note,
-            "建議停損": round(stop_loss, 2),
+            "🎯 建議入手價": round(buy_price, 2),
             "訊號": action,
+            "5日目標": round(pred_5, 2) if pred_5 > 0 else "-",
+            "10日目標": round(pred_10, 2) if pred_10 > 0 else "-",
+            "30日目標": round(pred_30, 2) if pred_30 > 0 else "-",
+            "建議停損": round(stop_loss, 2),
             "_sort": trend_score + rebound_score
         }
     except: return None
@@ -107,18 +119,19 @@ def calculate_metrics(ticker, df):
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("💰 直接掛單助手")
-st.caption("直接給你價格，不用猜。")
+st.title("🔮 AI 股價預言家")
+st.caption("基於 AI 趨勢線演算法，推算未來 5/10/30 天的目標價位。")
 
-if st.button("🔄 更新掛單價格", type="primary"):
-    with st.spinner('正在計算最佳掛單點...'):
+if st.button("🔄 更新預測目標", type="primary"):
+    with st.spinner('正在計算未來趨勢...'):
         raw_data = fetch_all_data(DEFAULT_STOCKS)
         if raw_data is not None and not raw_data.empty:
             results = []
             for t in DEFAULT_STOCKS:
                 try:
                     res = calculate_metrics(t, raw_data[t])
-                    if res and "觀望" not in res['訊號']: # 只顯示要買的
+                    # 只顯示買進訊號，且趨勢是向上的股票
+                    if res and "觀望" not in res['訊號'] and res['5日目標'] != "-": 
                         results.append(res)
                 except: continue
             
@@ -126,7 +139,6 @@ if st.button("🔄 更新掛單價格", type="primary"):
             if not df.empty:
                 df = df.sort_values(by='_sort', ascending=False).drop(columns=['_sort'])
                 
-                # 樣式
                 def highlight(val):
                     if "強力" in val: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
                     if "偏多" in val: return 'background-color: #fff5e6; color: #d68910'
@@ -138,9 +150,12 @@ if st.button("🔄 更新掛單價格", type="primary"):
                     use_container_width=True,
                     column_config={
                         "🎯 建議入手價": st.column_config.NumberColumn(format="%.2f", help="請直接掛這個價格"),
-                        "備註": st.column_config.TextColumn(width="medium"),
-                        "建議停損": st.column_config.NumberColumn(format="%.2f", help="跌破請務必出場")
+                        "5日目標": st.column_config.TextColumn(help="若趨勢不變，預計 1 週後的價格"),
+                        "10日目標": st.column_config.TextColumn(help="預計 2 週後的價格"),
+                        "30日目標": st.column_config.TextColumn(help="預計 1 個月後的價格 (僅供參考)"),
+                        "建議停損": st.column_config.NumberColumn(format="%.2f", help="防守底線")
                     }
                 )
-            else: st.info("目前沒有好買點，現金為王。")
+                st.info("💡 小技巧：當股價達到「5日目標」時，可以先賣掉 1/3 獲利放口袋；達到「10日目標」再賣 1/3。")
+            else: st.info("目前沒有趨勢向上的好股票。")
         else: st.error("連線失敗")
