@@ -2,14 +2,14 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import feedparser # 新增：用來抓新聞
+import feedparser
 import urllib.parse
 from ta.trend import MACD, EMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="AI 雙核心操盤手", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="AI 雙核心戰情室", layout="wide", page_icon="⚡")
 
 # ==========================================
 # 📋 股票分類清單
@@ -34,42 +34,37 @@ SECTORS = {
 ALL_STOCKS = [item for sublist in SECTORS.values() for item in sublist]
 
 # ==========================================
-# 📰 新聞情感分析引擎 (NLP Engine)
+# 📰 新聞情感分析
 # ==========================================
 def analyze_news_sentiment(ticker):
-    # 1. 處理股票名稱 (去掉 .TW 方便搜尋)
     stock_name = ticker.replace(".TW", "")
-    if ticker in ["2330.TW"]: stock_name = "台積電"
-    elif ticker in ["2317.TW"]: stock_name = "鴻海"
-    elif ticker in ["2603.TW"]: stock_name = "長榮"
-    # (可自行擴充更多對照表，或直接搜代號)
-    
-    # 2. 構建 Google News RSS URL
+    # 簡單映射常見名稱優化搜尋
+    name_map = {"2330": "台積電", "2317": "鴻海", "2603": "長榮", "2454": "聯發科", "3017": "奇鋐"}
+    for k, v in name_map.items():
+        if k in stock_name: stock_name = v
+        
     encoded_name = urllib.parse.quote(stock_name)
-    rss_url = f"https://news.google.com/rss/search?q={encoded_name}+when:7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    rss_url = f"https://news.google.com/rss/search?q={encoded_name}+when:5d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     
     try:
         feed = feedparser.parse(rss_url)
-        if not feed.entries: return 0, "無近期新聞"
+        if not feed.entries: return 0, "無新聞"
         
-        # 3. 關鍵字定義
-        pos_keywords = ["營收", "獲利", "創高", "成長", "大單", "買超", "調升", "漲停", "利多", "突破", "強勢", "配息", "填息"]
-        neg_keywords = ["虧損", "衰退", "賣超", "調降", "重挫", "跌停", "利空", "疲弱", "下修", "斬倉", "貼息"]
+        pos_words = ["營收", "獲利", "新高", "大單", "買超", "調升", "漲停", "強勢", "填息", "完銷"]
+        neg_words = ["虧損", "衰退", "賣超", "調降", "重挫", "跌停", "利空", "斬倉", "貼息"]
         
         score = 0
-        latest_title = feed.entries[0].title if feed.entries else ""
+        title = feed.entries[0].title[:15] + "..." # 標題只取前15字，避免太長
         
-        # 4. 掃描前 5 則新聞標題
-        for entry in feed.entries[:5]:
-            title = entry.title
-            for w in pos_keywords:
-                if w in title: score += 1
-            for w in neg_keywords:
-                if w in title: score -= 1.5 # 壞消息權重通常比較大
+        for entry in feed.entries[:3]: # 只看前3則
+            t = entry.title
+            for w in pos_words: 
+                if w in t: score += 1
+            for w in neg_words: 
+                if w in t: score -= 1.5
         
-        return score, latest_title
-    except:
-        return 0, "分析失敗"
+        return score, title
+    except: return 0, "分析失敗"
 
 # ==========================================
 # 🛠️ 核心運算
@@ -87,13 +82,13 @@ def calculate_metrics(ticker, df):
         df = df.dropna(how='all')
         if len(df) < 5: return None
 
-        # --- 1. 技術面運算 ---
         close = df['Close']
         high = df['High']
         low = df['Low']
         curr_price = close.iloc[-1]
-        is_etf = ticker.startswith("00")
+        is_etf = ticker.startswith("00") or ticker.endswith("A.TW")
 
+        # 指標運算
         def safe_ind(func, default=0):
             try: return func()
             except: return pd.Series([default]*len(close))
@@ -108,52 +103,48 @@ def calculate_metrics(ticker, df):
         except: bb_lower = curr_price * 0.9
 
         ma_5 = close.rolling(window=5).mean()
-        def get_last(s): return s.iloc[-1] if not pd.isna(s.iloc[-1]) else 0
+        curr_ma5 = ma_5.iloc[-1] if not pd.isna(ma_5.iloc[-1]) else curr_price
+        curr_atr = atr_val.iloc[-1] if not pd.isna(atr_val.iloc[-1]) else 0
+        curr_rsi = rsi_val.iloc[-1] if not pd.isna(rsi_val.iloc[-1]) else 50
+        
+        val_e20 = ema_20.iloc[-1]
+        val_e60 = ema_60.iloc[-1]
 
-        curr_ma5 = get_last(ma_5) if get_last(ma_5) > 0 else curr_price
-        curr_atr = get_last(atr_val)
-        curr_rsi = get_last(rsi_val)
-        val_e20 = get_last(ema_20)
-        val_e60 = get_last(ema_60)
-        val_macd = get_last(macd_val)
-        val_sig = get_last(sig_val)
-
-        # 技術評分
+        # 評分
         tech_score = 0
         rebound_score = 0
+        
+        # 1. 趨勢
         if curr_price > val_e20 > val_e60: tech_score += 40
         elif curr_price > val_e60: tech_score += 20
-        if val_macd > val_sig: tech_score += 20
+        if macd_val.iloc[-1] > sig_val.iloc[-1]: tech_score += 20
         if 50 <= curr_rsi <= 75: tech_score += 20
         
+        # 2. 抄底 (ETF寬容)
         rsi_limit = 45 if is_etf else 40
         if curr_rsi < 30 and curr_rsi > 0: rebound_score += 40
         elif curr_rsi < rsi_limit and curr_rsi > 0: rebound_score += 20
         if curr_price <= bb_lower: rebound_score += 30
 
-        # --- 2. 消息面運算 (News Sentiment) ---
-        # 注意：為了速度，這裡我們只在 Streamlit 執行時即時抓取，不在此函式內做大量並行
-        # 但為了展示，我們假設這裡呼叫 (實際執行在 UI 層做 Threading 優化)
-        news_score = 0 
-        news_summary = ""
-
-        # --- 3. 訊號整合 ---
         total_tech_score = tech_score + rebound_score
-        
-        # 預測
-        pred_5_str = "-"
+
+        # 預測 (5日/10日/20日)
+        p5, p10, p20 = "-", "-", "-"
         if len(close) > 10:
             x = np.arange(len(close.tail(20)))
             y = close.tail(20).values
             try:
                 slope, _ = np.polyfit(x, y, 1)
                 if slope > 0:
-                    pred_5_str = f"{curr_price + (slope * 5):.1f}"
+                    p5 = f"{curr_price + (slope * 5):.1f}"
+                    p10 = f"{curr_price + (slope * 10):.1f}"
+                    p20 = f"{curr_price + (slope * 20):.1f}"
                 elif rebound_score >= 30:
                     target = val_e20 if val_e20 > curr_price else (curr_price * 1.03)
-                    pred_5_str = f"{target:.1f}"
+                    p5 = f"{target:.1f}"
             except: pass
 
+        # 訊號
         action = "👀"
         buy_price = 0.0
         buy_threshold = 50 if is_etf else 60
@@ -177,10 +168,13 @@ def calculate_metrics(ticker, df):
             "代號": ticker.replace(".TW", ""),
             "現價": round(curr_price, 1),
             "技術分": total_tech_score,
-            "RSI": int(curr_rsi),
+            "新聞": 0, # 先佔位
+            "頭條": "-",
             "🎯買點": round(buy_price, 1) if buy_price > 0 else "-",
             "💡訊號": action,
-            "5日": pred_5_str,
+            "5日": p5,
+            "10日": p10,
+            "20日": p20,
             "🛑停損": round(stop_loss, 1),
             "_sort": total_tech_score
         }
@@ -189,91 +183,27 @@ def calculate_metrics(ticker, df):
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("🧠 AI 雙核心操盤手 (技術+新聞)")
-st.caption("同時分析「股價走勢」與「新聞風向」，避開地雷股。")
+st.title("⚡ AI 雙核心戰情室 (精簡版)")
 
-if st.button("🔄 啟動雙核心掃描 (需時較久)", type="primary"):
-    with st.spinner('第一階段：技術面分析中...'):
+if st.button("🔄 掃描全市場", type="primary"):
+    with st.spinner('技術分析 + 新聞掃描中...'):
         raw_data = fetch_all_data(ALL_STOCKS)
         
         if raw_data is not None and not raw_data.empty:
             
-            # 第一階段：算出技術面好的股票
-            tech_results = []
+            # 第一階段：技術運算
+            all_res = []
             for t in ALL_STOCKS:
-                res = calculate_metrics(t, raw_data[t])
-                if res: tech_results.append(res)
+                r = calculate_metrics(t, raw_data[t])
+                if r: all_res.append(r)
             
-            # 建立 DataFrame
-            df = pd.DataFrame(tech_results)
+            df_all = pd.DataFrame(all_res)
             
-            if not df.empty:
-                # 篩選：只對「有訊號」(非觀望) 的股票去抓新聞，節省時間
-                target_stocks = df[df['💡訊號'] != "👀"]
+            # 第二階段：只針對有訊號的股票抓新聞
+            if not df_all.empty:
+                targets = df_all[df_all['💡訊號'] != "👀"]
                 
-                with st.spinner(f'第二階段：正在閱讀 {len(target_stocks)} 檔股票的新聞 (AI NLP)...'):
-                    
-                    news_scores = {}
-                    news_titles = {}
-                    
-                    # 使用多執行緒抓新聞加速
-                    with ThreadPoolExecutor(max_workers=5) as executor:
-                        future_to_stock = {executor.submit(analyze_news_sentiment, row['id']): row['id'] for index, row in target_stocks.iterrows()}
-                        for future in future_to_stock:
-                            stock_id = future_to_stock[future]
-                            try:
-                                n_score, n_title = future.result()
-                                news_scores[stock_id] = n_score
-                                news_titles[stock_id] = n_title
-                            except:
-                                news_scores[stock_id] = 0
-                                news_titles[stock_id] = "分析失敗"
-
-                # 將新聞分數合併回 DataFrame
-                df['新聞分'] = df['id'].map(news_scores).fillna(0)
-                df['最新頭條'] = df['id'].map(news_titles).fillna("-")
-
-                # 最終排序：(技術分 + 新聞分*10)
-                df['_final_sort'] = df['技術分'] + (df['新聞分'] * 5)
-                df = df.sort_values(by='_final_sort', ascending=False).drop(columns=['_final_sort', 'id'])
-
-                # 樣式設定
-                def highlight(val):
-                    if "強力" in str(val): return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
-                    if "偏多" in str(val): return 'background-color: #fff5e6; color: #d68910'
-                    if "甜蜜" in str(val): return 'background-color: #e6fffa; color: #006666'
-                    return 'color: #cccccc'
+                news_map = {}
+                title_map = {}
                 
-                def highlight_news(val):
-                    if val > 0: return 'color: #d63031; font-weight: bold' # 紅字(利多)
-                    if val < 0: return 'color: #00b894; font-weight: bold' # 綠字(利空)
-                    return 'color: gray'
-
-                # 顯示表格
-                st.dataframe(
-                    df.style.applymap(highlight, subset=['💡訊號'])
-                            .applymap(highlight_news, subset=['新聞分']),
-                    use_container_width=True,
-                    column_config={
-                        "代號": st.column_config.TextColumn(width="small"),
-                        "現價": st.column_config.NumberColumn(format="%.1f", width="small"),
-                        "技術分": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100, width="small"),
-                        "新聞分": st.column_config.NumberColumn(format="%.1f", help="正分代表利多，負分代表利空", width="small"),
-                        "最新頭條": st.column_config.TextColumn(width="large", help="最近一則新聞標題"),
-                        "🎯買點": st.column_config.TextColumn(width="small"),
-                        "💡訊號": st.column_config.TextColumn(width="small"),
-                        "5日": st.column_config.TextColumn(width="small"),
-                        "🛑停損": st.column_config.NumberColumn(format="%.1f", width="small")
-                    }
-                )
-                
-                st.markdown("""
-                ### 📰 如何解讀「新聞分」？
-                * **正分 (>0)：** 媒體都在報喜（營收創新高、獲利成長）。與技術面共振，**可安心買進**。
-                * **負分 (<0)：** 雖然技術面有訊號，但媒體在報憂（虧損、賣壓）。**小心是「誘多」騙線，建議減少資金或觀望**。
-                * **0 分：** 沒新聞或新聞中立，以技術面為主。
-                """)
-                
-            else: st.info("無數據")
-            
-        else: st.error("連線失敗")
+                with ThreadPoolExecutor(max_workers=5) as executor:
