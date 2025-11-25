@@ -9,7 +9,7 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="AI 智能決策 (中文版)", layout="wide", page_icon="🤖")
+st.set_page_config(page_title="AI 逆勢操盤手", layout="wide", page_icon="🦅")
 
 # ==========================================
 # 📋 股票與中文名稱對照表
@@ -56,7 +56,7 @@ SECTORS = {
 ALL_STOCKS = [item for sublist in SECTORS.values() for item in sublist]
 
 # ==========================================
-# 📰 後台新聞分析
+# 📰 新聞分析
 # ==========================================
 def get_news_score(ticker):
     name = STOCK_MAP.get(ticker, ticker.replace(".TW",""))
@@ -74,7 +74,7 @@ def get_news_score(ticker):
         for entry in feed.entries[:5]:
             t = entry.title
             for w in pos: score += 1
-            for w in neg: score -= 2
+            for w in neg: score -= 2 # 壞消息扣分重
         return score
     except: return 0
 
@@ -96,7 +96,7 @@ def calculate(ticker, df):
         curr = close.iloc[-1]
         is_etf = ticker.startswith("00") or ticker.endswith("A.TW")
 
-        # 技術指標
+        # 指標
         def safe(func): 
             try: return func()
             except: return pd.Series([0]*len(close))
@@ -107,7 +107,7 @@ def calculate(ticker, df):
         atr = safe(lambda: AverageTrueRange(high=df['High'], low=df['Low'], close=close).average_true_range()).iloc[-1]
         ma5 = close.rolling(5).mean().iloc[-1]
 
-        # 基礎評分
+        # 評分
         t_score = 0
         r_score = 0
         if curr > ema20 > ema60: t_score += 40
@@ -133,13 +133,13 @@ def calculate(ticker, df):
                     p5 = f"{curr + s*5:.1f}"
                     p10 = f"{curr + s*10:.1f}"
                     p20 = f"{curr + s*20:.1f}"
-                elif r_score >= 30:
+                elif r_score >= 30: # 反彈格局
                     target = ema20 if ema20 > curr else curr*1.03
                     p5 = f"{target:.1f}"
             except: pass
 
         stop_loss = curr - (2 * atr)
-
+        
         # 組合名稱
         clean_code = ticker.replace(".TW", "")
         stock_name = STOCK_MAP.get(ticker, "")
@@ -147,11 +147,12 @@ def calculate(ticker, df):
 
         return {
             "id": ticker,
-            "股票": display_name, # 新增這個欄位
+            "股票": display_name,
             "現價": round(curr, 1),
             "技術分": t_score + r_score,
             "趨勢分": t_score,
             "抄底分": r_score,
+            "RSI": int(rsi),
             "MA5": ma5,
             "5日": p5, "10日": p10, "20日": p20,
             "🛑停損": round(stop_loss, 1)
@@ -161,10 +162,10 @@ def calculate(ticker, df):
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("🤖 AI 智能決策 (中文顯示版)")
+st.title("🦅 AI 逆勢操盤手 (巴菲特模式)")
 
-if st.button("🔄 開始分析", type="primary"):
-    with st.spinner('AI 正在讀取市場數據與新聞...'):
+if st.button("🔄 尋找貪婪機會", type="primary"):
+    with st.spinner('正在尋找「別人恐懼」的機會...'):
         raw = fetch_data(ALL_STOCKS)
         
         if raw is not None:
@@ -191,6 +192,7 @@ if st.button("🔄 開始分析", type="primary"):
                 is_etf = r['id'].startswith("00")
                 pass_threshold = 50 if is_etf else 60
 
+                # 技術面判斷
                 if r['技術分'] >= pass_threshold:
                     if r['趨勢分'] > r['抄底分']:
                         signal = "🔴 偏多"
@@ -202,16 +204,31 @@ if st.button("🔄 開始分析", type="primary"):
                     if r['技術分'] >= 80: signal = "🔥 強力"
                     if r['現價'] < buy_at: buy_at = r['現價']
 
+                # --- 關鍵：巴菲特逆勢邏輯 ---
                 if signal != "👀":
+                    # 情況 A: 新聞很爛 (n_score < 0)
                     if n_score <= -2:
-                        signal = "⚠️ 有雷"
-                        buy_at = 0
+                        if r['抄底分'] >= 40: 
+                            # 技術面顯示超跌，新聞又爛 -> 這就是「恐懼」的時刻
+                            signal = "🩸 恐懼貪婪"
+                            buy_at = r['現價'] # 勇敢接刀
+                        else:
+                            # 技術面不夠低，新聞又爛 -> 這是真的爛
+                            signal = "⚠️ 有雷"
+                            buy_at = 0 # 避開
+                    
+                    # 情況 B: 新聞太好 (n_score > 2)
                     elif n_score >= 2:
-                        signal += "(雙確認)"
+                        if r['RSI'] > 80:
+                            # 漲太多 + 新聞狂吹 -> 這是「過熱」
+                            signal = "🚧 過熱警戒"
+                            buy_at = 0 # 不要追
+                        else:
+                            signal += "(雙確認)" # 趨勢好+新聞好，還沒過熱
 
                 r['💡AI判斷'] = signal
                 r['🎯買點'] = round(buy_at, 1) if buy_at > 0 else "-"
-                r['_sort'] = r['技術分'] + (n_score * 5)
+                r['_sort'] = r['技術分'] + abs(n_score * 5) # 壞新聞也是一種關注度，所以用絕對值排序
                 
                 final_data.append(r)
 
@@ -224,25 +241,27 @@ if st.button("🔄 開始分析", type="primary"):
                 sub = df[df['id'].isin(s_list)].copy()
                 if not sub.empty:
                     def style(v):
+                        if "恐懼" in v: return 'background-color: #8b0000; color: #ffffff; font-weight: bold' # 深紅底白字 (血流成河)
                         if "強力" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
                         if "雙確認" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
                         if "偏多" in v: return 'background-color: #fff5e6; color: #d68910'
                         if "甜蜜" in v: return 'background-color: #e6fffa; color: #006666'
                         if "有雷" in v: return 'background-color: #ffe6e6; color: red; text-decoration: line-through'
+                        if "過熱" in v: return 'background-color: #ffff00; color: black; font-weight: bold'
                         return 'color: #cccccc'
 
                     st.dataframe(
-                        sub.drop(columns=['id', '技術分', '趨勢分', '抄底分', 'MA5', '_sort']),
+                        sub.drop(columns=['id', '技術分', '趨勢分', '抄底分', 'MA5', '_sort', 'RSI']),
                         use_container_width=True,
                         column_config={
-                            "股票": st.column_config.TextColumn(width="medium", help="代號 + 名稱"),
+                            "股票": st.column_config.TextColumn(width="medium"),
                             "現價": st.column_config.NumberColumn(format="%.1f", width="small"),
                             "🎯買點": st.column_config.TextColumn(width="small"),
                             "💡AI判斷": st.column_config.TextColumn(width="medium"),
                             "5日": st.column_config.TextColumn(width="small"),
                             "10日": st.column_config.TextColumn(width="small"),
                             "20日": st.column_config.TextColumn(width="small"),
-                            "🛑停損": st.column_config.NumberColumn(format="%.1f", width="small", help="跌破這個價格請務必出場")
+                            "🛑停損": st.column_config.NumberColumn(format="%.1f", width="small")
                         }
                     )
                 else: st.info("無數據")
