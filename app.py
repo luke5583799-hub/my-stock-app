@@ -9,10 +9,10 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="AI 雙核心戰情室", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="AI 智能決策", layout="wide", page_icon="🤖")
 
 # ==========================================
-# 📋 股票分類清單
+# 📋 股票清單
 # ==========================================
 SECTORS = {
     "🚀 電子/AI": [
@@ -34,11 +34,11 @@ SECTORS = {
 ALL_STOCKS = [item for sublist in SECTORS.values() for item in sublist]
 
 # ==========================================
-# 📰 新聞情感分析
+# 📰 後台新聞分析 (不顯示，只影響結果)
 # ==========================================
-def analyze_news_sentiment(ticker):
+def get_news_score(ticker):
     stock_name = ticker.replace(".TW", "")
-    # 簡單映射常見名稱優化搜尋
+    # 簡單映射優化搜尋
     name_map = {"2330": "台積電", "2317": "鴻海", "2603": "長榮", "2454": "聯發科", "3017": "奇鋐"}
     for k, v in name_map.items():
         if k in stock_name: stock_name = v
@@ -48,223 +48,194 @@ def analyze_news_sentiment(ticker):
     
     try:
         feed = feedparser.parse(rss_url)
-        if not feed.entries: return 0, "無新聞"
+        if not feed.entries: return 0
         
         pos_words = ["營收", "獲利", "新高", "大單", "買超", "調升", "漲停", "強勢", "填息", "完銷"]
-        neg_words = ["虧損", "衰退", "賣超", "調降", "重挫", "跌停", "利空", "斬倉", "貼息"]
+        neg_words = ["虧損", "衰退", "賣超", "調降", "重挫", "跌停", "利空", "斬倉", "貼息", "下修"]
         
         score = 0
-        title = feed.entries[0].title[:15] + "..." # 標題只取前15字，避免太長
-        
-        for entry in feed.entries[:3]: # 只看前3則
+        for entry in feed.entries[:5]:
             t = entry.title
-            for w in pos_words: 
-                if w in t: score += 1
-            for w in neg_words: 
-                if w in t: score -= 1.5
-        
-        return score, title
-    except: return 0, "分析失敗"
+            for w in pos_words: score += 1
+            for w in neg_words: score -= 2 # 壞消息扣分更重，寧可錯殺
+        return score
+    except: return 0
 
 # ==========================================
 # 🛠️ 核心運算
 # ==========================================
 @st.cache_data(ttl=300)
-def fetch_all_data(tickers):
-    tickers_str = " ".join(tickers)
-    try:
-        return yf.download(tickers_str, period="6mo", group_by='ticker', progress=False)
+def fetch_data(tickers):
+    try: return yf.download(" ".join(tickers), period="6mo", group_by='ticker', progress=False)
     except: return None
 
-def calculate_metrics(ticker, df):
+def calculate(ticker, df):
     try:
         if isinstance(df.columns, pd.MultiIndex): df = df.xs(ticker, axis=1, level=0)
         df = df.dropna(how='all')
         if len(df) < 5: return None
 
         close = df['Close']
-        high = df['High']
-        low = df['Low']
-        curr_price = close.iloc[-1]
-        is_etf = ticker.startswith("00") or ticker.endswith("A.TW")
+        curr = close.iloc[-1]
+        is_etf = ticker.startswith("00")
 
-        # 指標運算
-        def safe_ind(func, default=0):
+        # 技術指標
+        def safe(func): 
             try: return func()
-            except: return pd.Series([default]*len(close))
+            except: return pd.Series([0]*len(close))
 
-        ema_20 = safe_ind(lambda: EMAIndicator(close=close, window=20).ema_indicator(), curr_price)
-        ema_60 = safe_ind(lambda: EMAIndicator(close=close, window=60).ema_indicator(), curr_price)
-        macd_val = safe_ind(lambda: MACD(close=close).macd(), 0)
-        sig_val = safe_ind(lambda: MACD(close=close).macd_signal(), 0)
-        rsi_val = safe_ind(lambda: RSIIndicator(close=close).rsi(), 50)
-        atr_val = safe_ind(lambda: AverageTrueRange(high=high, low=low, close=close).average_true_range(), curr_price*0.02)
-        try: bb_lower = BollingerBands(close=close, window=20, window_dev=2).bollinger_lband().iloc[-1]
-        except: bb_lower = curr_price * 0.9
+        ema20 = safe(lambda: EMAIndicator(close=close, window=20).ema_indicator()).iloc[-1]
+        ema60 = safe(lambda: EMAIndicator(close=close, window=60).ema_indicator()).iloc[-1]
+        rsi = safe(lambda: RSIIndicator(close=close).rsi()).iloc[-1]
+        atr = safe(lambda: AverageTrueRange(high=df['High'], low=df['Low'], close=close).average_true_range()).iloc[-1]
+        ma5 = close.rolling(5).mean().iloc[-1]
 
-        ma_5 = close.rolling(window=5).mean()
-        curr_ma5 = ma_5.iloc[-1] if not pd.isna(ma_5.iloc[-1]) else curr_price
-        curr_atr = atr_val.iloc[-1] if not pd.isna(atr_val.iloc[-1]) else 0
-        curr_rsi = rsi_val.iloc[-1] if not pd.isna(rsi_val.iloc[-1]) else 50
+        # 基礎評分
+        t_score = 0
+        r_score = 0
+        if curr > ema20 > ema60: t_score += 40
+        elif curr > ema60: t_score += 20
+        if 50 <= rsi <= 75: t_score += 20
         
-        val_e20 = ema_20.iloc[-1]
-        val_e60 = ema_60.iloc[-1]
-
-        # 評分
-        tech_score = 0
-        rebound_score = 0
-        
-        # 1. 趨勢
-        if curr_price > val_e20 > val_e60: tech_score += 40
-        elif curr_price > val_e60: tech_score += 20
-        if macd_val.iloc[-1] > sig_val.iloc[-1]: tech_score += 20
-        if 50 <= curr_rsi <= 75: tech_score += 20
-        
-        # 2. 抄底 (ETF寬容)
         rsi_limit = 45 if is_etf else 40
-        if curr_rsi < 30 and curr_rsi > 0: rebound_score += 40
-        elif curr_rsi < rsi_limit and curr_rsi > 0: rebound_score += 20
-        if curr_price <= bb_lower: rebound_score += 30
+        if 0 < rsi < 30: r_score += 40
+        elif 0 < rsi < rsi_limit: r_score += 20
+        try:
+            bb_low = BollingerBands(close, window=20, window_dev=2).bollinger_lband().iloc[-1]
+            if curr <= bb_low: r_score += 30
+        except: pass
 
-        total_tech_score = tech_score + rebound_score
-
-        # 預測 (5日/10日/20日)
+        # 預測目標
         p5, p10, p20 = "-", "-", "-"
         if len(close) > 10:
             x = np.arange(len(close.tail(20)))
             y = close.tail(20).values
             try:
-                slope, _ = np.polyfit(x, y, 1)
-                if slope > 0:
-                    p5 = f"{curr_price + (slope * 5):.1f}"
-                    p10 = f"{curr_price + (slope * 10):.1f}"
-                    p20 = f"{curr_price + (slope * 20):.1f}"
-                elif rebound_score >= 30:
-                    target = val_e20 if val_e20 > curr_price else (curr_price * 1.03)
+                s, _ = np.polyfit(x, y, 1)
+                if s > 0:
+                    p5 = f"{curr + s*5:.1f}"
+                    p10 = f"{curr + s*10:.1f}"
+                    p20 = f"{curr + s*20:.1f}"
+                elif r_score >= 30:
+                    target = ema20 if ema20 > curr else curr*1.03
                     p5 = f"{target:.1f}"
             except: pass
 
-        # 訊號
-        action = "👀"
-        buy_price = 0.0
-        buy_threshold = 50 if is_etf else 60
-
-        if tech_score >= 80:
-            action = "🔥 強力"
-            buy_price = curr_price
-        elif total_tech_score >= buy_threshold:
-            if tech_score > rebound_score:
-                action = "🔴 偏多"
-                buy_price = curr_ma5
-            else:
-                action = "💎 甜蜜"
-                buy_price = curr_price
-            if curr_price < buy_price: buy_price = curr_price
-
-        stop_loss = curr_price - (2 * curr_atr)
+        stop_loss = curr - (2 * atr)
 
         return {
             "id": ticker,
             "代號": ticker.replace(".TW", ""),
-            "現價": round(curr_price, 1),
-            "技術分": total_tech_score,
-            "新聞": 0, # 先佔位
-            "頭條": "-",
-            "🎯買點": round(buy_price, 1) if buy_price > 0 else "-",
-            "💡訊號": action,
-            "5日": p5,
-            "10日": p10,
-            "20日": p20,
-            "🛑停損": round(stop_loss, 1),
-            "_sort": total_tech_score
+            "現價": round(curr, 1),
+            "技術分": t_score + r_score,
+            "趨勢分": t_score,
+            "抄底分": r_score,
+            "MA5": ma5,
+            "5日": p5, "10日": p10, "20日": p20,
+            "停損": round(stop_loss, 1)
         }
     except: return None
 
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("⚡ AI 雙核心戰情室 (精簡版)")
+st.title("🤖 AI 智能決策 (結果導向版)")
 
-if st.button("🔄 掃描全市場", type="primary"):
-    with st.spinner('技術分析 + 新聞掃描中...'):
-        raw_data = fetch_all_data(ALL_STOCKS)
+if st.button("🔄 AI 決策分析", type="primary"):
+    with st.spinner('AI 正在後台分析新聞與技術面...'):
+        raw = fetch_data(ALL_STOCKS)
         
-        if raw_data is not None and not raw_data.empty:
-            
-            # 第一階段：技術運算
-            all_res = []
+        if raw is not None:
+            # 1. 技術面篩選
+            tech_res = []
             for t in ALL_STOCKS:
-                r = calculate_metrics(t, raw_data[t])
-                if r: all_res.append(r)
+                r = calculate(t, raw[t])
+                if r: tech_res.append(r)
             
-            df_all = pd.DataFrame(all_res)
+            # 2. 針對有機會的股票，後台查新聞
+            candidates = [r for r in tech_res if r['技術分'] >= 40] # 分數太低連新聞都不用查
             
-            # 第二階段：只針對有訊號的股票抓新聞
-            if not df_all.empty:
-                targets = df_all[df_all['💡訊號'] != "👀"]
+            news_map = {}
+            with ThreadPoolExecutor(max_workers=5) as ex:
+                future_map = {ex.submit(get_news_score, c['id']): c['id'] for c in candidates}
+                for f in future_map:
+                    try: news_map[future_map[f]] = f.result()
+                    except: news_map[future_map[f]] = 0
+            
+            # 3. 整合最終判斷
+            final_data = []
+            for r in tech_res:
+                n_score = news_map.get(r['id'], 0)
                 
-                news_map = {}
-                title_map = {}
-                
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    future_to_id = {executor.submit(analyze_news_sentiment, row['id']): row['id'] for i, row in targets.iterrows()}
-                    for future in future_to_id:
-                        sid = future_to_id[future]
-                        try:
-                            s, t = future.result()
-                            news_map[sid] = s
-                            title_map[sid] = t
-                        except: pass
-                
-                df_all['新聞'] = df_all['id'].map(news_map).fillna(0)
-                df_all['頭條'] = df_all['id'].map(title_map).fillna("-")
-                
-                # 排序
-                df_all['_sort'] = df_all['技術分'] + (df_all['新聞'] * 5)
+                # --- AI 決策大腦 ---
+                signal = "👀"
+                buy_at = 0.0
+                is_etf = r['id'].startswith("00")
+                pass_threshold = 50 if is_etf else 60
 
-            # 顯示分頁
-            tab1, tab2, tab3, tab4 = st.tabs(["🚀 電子", "🚢 傳產金融", "📊 ETF", "🇺🇸 美股"])
+                # 基礎判斷
+                if r['技術分'] >= pass_threshold:
+                    if r['趨勢分'] > r['抄底分']:
+                        signal = "🔴 偏多"
+                        buy_at = r['MA5']
+                    else:
+                        signal = "💎 甜蜜"
+                        buy_at = r['現價']
+                    
+                    if r['技術分'] >= 80: signal = "🔥 強力"
+                    if r['現價'] < buy_at: buy_at = r['現價']
+
+                # 加入新聞濾網 (最重要的修改)
+                if signal != "👀":
+                    if n_score <= -2:
+                        signal = "⚠️ 有雷勿碰" # 技術面好，但新聞很差 -> 擋下
+                        buy_at = 0
+                    elif n_score >= 2:
+                        signal += "(雙確認)" # 技術面好 + 新聞好 -> 加強信心
+
+                r['💡AI判斷'] = signal
+                r['🎯買點'] = round(buy_at, 1) if buy_at > 0 else "-"
+                r['_sort'] = r['技術分'] + (n_score * 5)
+                
+                final_data.append(r)
+
+            df = pd.DataFrame(final_data)
+            df = df.sort_values(by='_sort', ascending=False)
+
+            # 4. 顯示
+            tab1, tab2, tab3, tab4 = st.tabs(["🚀 電子", "🚢 金融傳產", "📊 ETF", "🇺🇸 美股"])
             
-            def show_tab(sector_stocks):
-                # 過濾出該板塊的股票
-                sub_df = df_all[df_all['id'].isin(sector_stocks)].copy()
-                if not sub_df.empty:
-                    sub_df = sub_df.sort_values(by='_sort', ascending=False).drop(columns=['id', '_sort'])
-                    
-                    def style_rows(val):
-                        if "強力" in str(val): return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
-                        if "偏多" in str(val): return 'background-color: #fff5e6; color: #d68910'
-                        if "甜蜜" in str(val): return 'background-color: #e6fffa; color: #006666'
+            def show(s_list):
+                sub = df[df['id'].isin(s_list)].copy()
+                if not sub.empty:
+                    # 樣式
+                    def style(v):
+                        if "強力" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
+                        if "雙確認" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
+                        if "偏多" in v: return 'background-color: #fff5e6; color: #d68910'
+                        if "甜蜜" in v: return 'background-color: #e6fffa; color: #006666'
+                        if "有雷" in v: return 'background-color: #ffe6e6; color: red; text-decoration: line-through'
                         return 'color: #cccccc'
-                    
-                    def style_news(val):
-                        if val > 0: return 'color: #d63031; font-weight: bold'
-                        if val < 0: return 'color: #00b894'
-                        return 'color: #b2bec3'
 
                     st.dataframe(
-                        sub_df.style.applymap(style_rows, subset=['💡訊號'])
-                              .applymap(style_news, subset=['新聞']),
+                        sub.drop(columns=['id', '技術分', '趨勢分', '抄底分', 'MA5', '_sort']),
                         use_container_width=True,
                         column_config={
                             "代號": st.column_config.TextColumn(width="small"),
                             "現價": st.column_config.NumberColumn(format="%.1f", width="small"),
-                            "技術分": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100, width="small"),
-                            "新聞": st.column_config.NumberColumn(format="%.1f", width="small", help="正=利多, 負=利空"),
-                            "頭條": st.column_config.TextColumn(width="medium"), # 新聞標題給多一點點空間
                             "🎯買點": st.column_config.TextColumn(width="small"),
-                            "💡訊號": st.column_config.TextColumn(width="small"),
+                            "💡AI判斷": st.column_config.TextColumn(width="medium"),
                             "5日": st.column_config.TextColumn(width="small"),
                             "10日": st.column_config.TextColumn(width="small"),
                             "20日": st.column_config.TextColumn(width="small"),
-                            "🛑停損": st.column_config.NumberColumn(format="%.1f", width="small")
+                            "停損": st.column_config.NumberColumn(format="%.1f", width="small")
                         }
                     )
                 else: st.info("無數據")
 
-            with tab1: show_tab(SECTORS["🚀 電子/AI"])
-            with tab2: show_tab(SECTORS["🚢 傳產/金融"])
-            with tab3: show_tab(SECTORS["📊 ETF"])
-            with tab4: show_tab(SECTORS["🇺🇸 美股"])
+            with tab1: show(SECTORS["🚀 電子/AI"])
+            with tab2: show(SECTORS["🚢 傳產/金融"])
+            with tab3: show(SECTORS["📊 ETF"])
+            with tab4: show(SECTORS["🇺🇸 美股"])
 
         else: st.error("連線失敗")
