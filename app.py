@@ -6,7 +6,7 @@ from ta.trend import MACD, EMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
-st.set_page_config(page_title="AI 股市戰情室 (分類版)", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="AI 股市戰情室 (精簡版)", layout="wide", page_icon="⚡")
 
 # ==========================================
 # 📋 股票分類清單
@@ -20,16 +20,15 @@ SECTORS = {
         "2603.TW", "2609.TW", "2615.TW", "2618.TW", "2002.TW", "1605.TW", "1513.TW", "1519.TW",
         "2881.TW", "2882.TW", "2891.TW", "2886.TW", "5880.TW"
     ],
-    "📊 ETF (含主動)": [
+    "📊 ETF": [
         "00980A.TW", "00981A.TW", "00982A.TW", "00983A.TW",
         "0050.TW", "0056.TW", "00878.TW", "00929.TW", "00919.TW"
     ],
-    "🇺🇸 美股巨頭": [
+    "🇺🇸 美股": [
         "NVDA", "TSLA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "AMD", "INTC", "PLTR", "SMCI"
     ]
 }
 
-# 扁平化清單用於下載
 ALL_STOCKS = [item for sublist in SECTORS.values() for item in sublist]
 
 @st.cache_data(ttl=300)
@@ -90,7 +89,6 @@ def calculate_metrics(ticker, df):
         
         bias = ((curr_price - val_e20) / val_e20) * 100 if val_e20 > 0 else 0
         
-        # ETF 寬容模式
         rsi_limit = 45 if is_etf else 40
         if curr_rsi < 30 and curr_rsi > 0: rebound_score += 40
         elif curr_rsi < rsi_limit and curr_rsi > 0: rebound_score += 20
@@ -99,51 +97,56 @@ def calculate_metrics(ticker, df):
 
         total_score = trend_score + rebound_score
 
-        # 預測
+        # 預測 (5/10/30日)
         pred_5_str = "-"
-        target_note = ""
+        pred_10_str = "-"
+        pred_30_str = "-"
+        
         if len(close) > 10:
             x = np.arange(len(close.tail(20)))
             y = close.tail(20).values
             try:
                 slope, _ = np.polyfit(x, y, 1)
                 if slope > 0:
-                    pred_5_str = f"{curr_price + (slope * 5):.2f}"
-                    target_note = "趨勢"
+                    pred_5_str = f"{curr_price + (slope * 5):.1f}" # 小數點一位省空間
+                    pred_10_str = f"{curr_price + (slope * 10):.1f}"
+                    pred_30_str = f"{curr_price + (slope * 30):.1f}"
                 elif rebound_score >= 30:
                     target = val_e20 if val_e20 > curr_price else (curr_price * 1.03)
-                    pred_5_str = f"{target:.2f}"
-                    target_note = "反彈"
+                    pred_5_str = f"{target:.1f}"
+                    pred_10_str = f"{target:.1f}"
             except: pass
 
         # 訊號
-        action = "👀 觀望"
+        action = "👀" # 用符號省空間
         buy_price = 0.0
         buy_threshold = 50 if is_etf else 60
 
         if trend_score >= 80:
-            action = "🔥 強力買進"
+            action = "🔥 強力"
             buy_price = curr_price
         elif total_score >= buy_threshold:
             if trend_score > rebound_score:
-                action = "🔴 偏多操作"
+                action = "🔴 偏多"
                 buy_price = curr_ma5
             else:
-                action = "💎 甜蜜買點"
+                action = "💎 甜蜜"
                 buy_price = curr_price
             if curr_price < buy_price: buy_price = curr_price
 
         stop_loss = curr_price - (2 * curr_atr)
 
         return {
-            "代號": ticker,
-            "現價": round(curr_price, 2),
+            "代號": ticker.replace(".TW", ""), # 去掉 .TW 省空間
+            "現價": round(curr_price, 1),
             "總分": total_score,
-            "RSI": round(curr_rsi, 1),
-            "🎯 建議入手": round(buy_price, 2) if buy_price > 0 else "-",
-            "訊號": action,
-            "5日目標": pred_5_str,
-            "建議停損": round(stop_loss, 2),
+            "RSI": int(curr_rsi), # 取整數省空間
+            "🎯買點": round(buy_price, 1) if buy_price > 0 else "-",
+            "💡訊號": action,
+            "5日": pred_5_str,
+            "10日": pred_10_str,
+            "30日": pred_30_str,
+            "🛑停損": round(stop_loss, 1),
             "_sort": total_score
         }
     except: return None
@@ -151,19 +154,16 @@ def calculate_metrics(ticker, df):
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("⚡ AI 股市戰情室 (分類版)")
-st.caption("自動將股票分類，想看哪一類直接點！")
+st.title("⚡ AI 股市戰情室 (精簡版)")
 
-if st.button("🔄 更新全市場數據", type="primary"):
-    with st.spinner('正在掃描四大板塊...'):
+if st.button("🔄 更新數據", type="primary"):
+    with st.spinner('掃描中...'):
         raw_data = fetch_all_data(ALL_STOCKS)
         
         if raw_data is not None and not raw_data.empty:
-            # 建立分頁
-            tab1, tab2, tab3, tab4 = st.tabs(["🚀 電子/AI", "🚢 傳產/金融", "📊 ETF", "🇺🇸 美股"])
+            tab1, tab2, tab3, tab4 = st.tabs(["🚀 電子", "🚢 金融傳產", "📊 ETF", "🇺🇸 美股"])
             
-            # 定義顯示函式
-            def show_sector(sector_name, stocks_list):
+            def show_sector(stocks_list):
                 results = []
                 for t in stocks_list:
                     try:
@@ -179,28 +179,30 @@ if st.button("🔄 更新全市場數據", type="primary"):
                         if "強力" in val: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
                         if "偏多" in val: return 'background-color: #fff5e6; color: #d68910'
                         if "甜蜜" in val: return 'background-color: #e6fffa; color: #006666'
-                        return 'color: #999999'
+                        return 'color: #cccccc'
 
                     st.dataframe(
-                        df.style.applymap(highlight, subset=['訊號']),
+                        df.style.applymap(highlight, subset=['💡訊號']),
                         use_container_width=True,
                         column_config={
                             "代號": st.column_config.TextColumn(width="small"),
-                            "現價": st.column_config.NumberColumn(format="%.2f", width="small"),
+                            "現價": st.column_config.NumberColumn(format="%.1f", width="small"),
                             "總分": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100, width="small"),
-                            "RSI": st.column_config.NumberColumn(format="%.1f", width="small"),
-                            "🎯 建議入手": st.column_config.TextColumn(width="medium"),
-                            "訊號": st.column_config.TextColumn(width="medium"),
-                            "5日目標": st.column_config.TextColumn(width="small"),
-                            "建議停損": st.column_config.NumberColumn(format="%.2f", width="small")
+                            "RSI": st.column_config.NumberColumn(format="%d", width="small"),
+                            "🎯買點": st.column_config.TextColumn(width="small"),
+                            "💡訊號": st.column_config.TextColumn(width="small"),
+                            # 關鍵：這裡全部設為 small
+                            "5日": st.column_config.TextColumn(width="small"),
+                            "10日": st.column_config.TextColumn(width="small"),
+                            "30日": st.column_config.TextColumn(width="small"),
+                            "🛑停損": st.column_config.NumberColumn(format="%.1f", width="small")
                         }
                     )
-                else: st.info(f"{sector_name} 目前無數據。")
+                else: st.info("無數據")
 
-            # 依序顯示在分頁中
-            with tab1: show_sector("電子", SECTORS["🚀 電子/AI"])
-            with tab2: show_sector("金融傳產", SECTORS["🚢 傳產/金融"])
-            with tab3: show_sector("ETF", SECTORS["📊 ETF (含主動)"])
-            with tab4: show_sector("美股", SECTORS["🇺🇸 美股巨頭"])
+            with tab1: show_sector(SECTORS["🚀 電子/AI"])
+            with tab2: show_sector(SECTORS["🚢 傳產/金融"])
+            with tab3: show_sector(SECTORS["📊 ETF"])
+            with tab4: show_sector(SECTORS["🇺🇸 美股"])
             
         else: st.error("連線失敗")
