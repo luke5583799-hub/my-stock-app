@@ -207,3 +207,64 @@ if st.button("🔄 掃描全市場", type="primary"):
                 title_map = {}
                 
                 with ThreadPoolExecutor(max_workers=5) as executor:
+                    future_to_id = {executor.submit(analyze_news_sentiment, row['id']): row['id'] for i, row in targets.iterrows()}
+                    for future in future_to_id:
+                        sid = future_to_id[future]
+                        try:
+                            s, t = future.result()
+                            news_map[sid] = s
+                            title_map[sid] = t
+                        except: pass
+                
+                df_all['新聞'] = df_all['id'].map(news_map).fillna(0)
+                df_all['頭條'] = df_all['id'].map(title_map).fillna("-")
+                
+                # 排序
+                df_all['_sort'] = df_all['技術分'] + (df_all['新聞'] * 5)
+
+            # 顯示分頁
+            tab1, tab2, tab3, tab4 = st.tabs(["🚀 電子", "🚢 傳產金融", "📊 ETF", "🇺🇸 美股"])
+            
+            def show_tab(sector_stocks):
+                # 過濾出該板塊的股票
+                sub_df = df_all[df_all['id'].isin(sector_stocks)].copy()
+                if not sub_df.empty:
+                    sub_df = sub_df.sort_values(by='_sort', ascending=False).drop(columns=['id', '_sort'])
+                    
+                    def style_rows(val):
+                        if "強力" in str(val): return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
+                        if "偏多" in str(val): return 'background-color: #fff5e6; color: #d68910'
+                        if "甜蜜" in str(val): return 'background-color: #e6fffa; color: #006666'
+                        return 'color: #cccccc'
+                    
+                    def style_news(val):
+                        if val > 0: return 'color: #d63031; font-weight: bold'
+                        if val < 0: return 'color: #00b894'
+                        return 'color: #b2bec3'
+
+                    st.dataframe(
+                        sub_df.style.applymap(style_rows, subset=['💡訊號'])
+                              .applymap(style_news, subset=['新聞']),
+                        use_container_width=True,
+                        column_config={
+                            "代號": st.column_config.TextColumn(width="small"),
+                            "現價": st.column_config.NumberColumn(format="%.1f", width="small"),
+                            "技術分": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100, width="small"),
+                            "新聞": st.column_config.NumberColumn(format="%.1f", width="small", help="正=利多, 負=利空"),
+                            "頭條": st.column_config.TextColumn(width="medium"), # 新聞標題給多一點點空間
+                            "🎯買點": st.column_config.TextColumn(width="small"),
+                            "💡訊號": st.column_config.TextColumn(width="small"),
+                            "5日": st.column_config.TextColumn(width="small"),
+                            "10日": st.column_config.TextColumn(width="small"),
+                            "20日": st.column_config.TextColumn(width="small"),
+                            "🛑停損": st.column_config.NumberColumn(format="%.1f", width="small")
+                        }
+                    )
+                else: st.info("無數據")
+
+            with tab1: show_tab(SECTORS["🚀 電子/AI"])
+            with tab2: show_tab(SECTORS["🚢 傳產/金融"])
+            with tab3: show_tab(SECTORS["📊 ETF"])
+            with tab4: show_tab(SECTORS["🇺🇸 美股"])
+
+        else: st.error("連線失敗")
