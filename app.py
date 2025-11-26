@@ -9,7 +9,7 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="AI 智能操盤手 (完整顯示版)", layout="wide", page_icon="⚖️")
+st.set_page_config(page_title="AI 股市全方位操盤手", layout="wide", page_icon="💹")
 
 # ==========================================
 # 📋 股票清單
@@ -54,7 +54,7 @@ SECTORS = {
 ALL_STOCKS = [item for sublist in SECTORS.values() for item in sublist]
 
 # ==========================================
-# 📰 新聞分析 (分級權重版)
+# 📰 新聞分析
 # ==========================================
 def get_news_score(ticker):
     name = STOCK_MAP.get(ticker, ticker.replace(".TW",""))
@@ -63,23 +63,13 @@ def get_news_score(ticker):
     try:
         feed = feedparser.parse(rss_url)
         if not feed.entries: return 0
-        
-        pos_L1 = ["買超", "回升", "反彈", "填息", "完銷", "股息"]
-        neg_L1 = ["賣超", "調節", "震盪", "貼息", "疲弱"]
-        pos_L2 = ["營收新高", "獲利翻倍", "大漲", "漲停", "強勢", "大單", "調升"]
-        neg_L2 = ["重挫", "跌停", "跳水", "下修", "不如預期", "砍單"]
-        pos_L3 = ["併購", "收購"] 
-        neg_L3 = ["違約", "假帳", "掏空", "搜索", "破產", "下市", "財報難產"]
-
+        pos = ["營收", "獲利", "新高", "大單", "買超", "調升", "漲停", "強勢", "填息", "完銷", "反彈", "回升", "大漲", "復甦"]
+        neg = ["虧損", "衰退", "調降", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
         score = 0
         for entry in feed.entries[:5]:
             t = entry.title
-            for w in pos_L3: score += 10
-            for w in neg_L3: score -= 10
-            for w in pos_L2: score += 3
-            for w in neg_L2: score -= 3
-            for w in pos_L1: score += 1
-            for w in neg_L1: score -= 1
+            for w in pos: score += 1
+            for w in neg: score -= 1
         return score
     except: return 0
 
@@ -112,7 +102,7 @@ def calculate(ticker, df):
         atr = safe(lambda: AverageTrueRange(high=df['High'], low=df['Low'], close=close).average_true_range()).iloc[-1]
         ma5 = close.rolling(5).mean().iloc[-1]
 
-        # 評分
+        # 基礎評分
         t_score = 0
         r_score = 0
         if curr > ema20 > ema60: t_score += 40
@@ -123,59 +113,90 @@ def calculate(ticker, df):
         if 0 < rsi < 30: r_score += 40
         elif 0 < rsi < rsi_limit: r_score += 20
         
-        # 價值濾網
-        ma240 = close.rolling(240).mean().iloc[-1]
-        if pd.isna(ma240): ma240 = curr
-        margin = (ma240 - curr) / ma240
-        position_scale = 1.0
-        if curr > ma240 * 1.2: position_scale = 0.5
-        elif curr < ma240 * 0.8: position_scale = 1.0
-
-        # 預測
+        # 預測與賣出邏輯 (關鍵修改)
+        p5_val, p10_val = 0, 0
         p5, p10, p20 = "-", "-", "-"
+        
         if len(close) > 20:
             x = np.arange(len(close.tail(20)))
             y = close.tail(20).values
             try:
                 s, _ = np.polyfit(x, y, 1)
                 if s > -10: 
-                    p5 = f"{curr + s*5:.1f}"
-                    p10 = f"{curr + s*10:.1f}"
+                    p5_val = curr + s*5
+                    p10_val = curr + s*10
+                    p5 = f"{p5_val:.1f}"
+                    p10 = f"{p10_val:.1f}"
                     p20 = f"{curr + s*20:.1f}"
                 elif r_score >= 20:
                     target = ema20 if ema20 > curr else curr*1.03
+                    p5_val = target
                     p5 = f"{target:.1f}"
             except: pass
 
         stop_loss = curr - (2.5 * atr)
 
-        # 修正：結合代號與名稱
-        clean_code = ticker.replace(".TW", "")
-        stock_name = STOCK_MAP.get(ticker, "")
-        display_name = f"{clean_code} {stock_name}"
+        # --- 🔥 賣出訊號判斷 (Sell Logic) ---
+        sell_signal = "-" # 預設無訊號
+        
+        # 1. 停損偵測
+        # (這裡模擬：如果持有成本在現價之上，且現價跌破停損 -> 實際上無法得知你的成本，但可以提示風險)
+        # 我們假設用戶已經持有，判斷現在是否該逃
+        if curr < stop_loss:
+            sell_signal = "🛑 破線快逃"
+        
+        # 2. 過熱偵測
+        elif rsi > 75:
+            sell_signal = "⚠️ 過熱減碼"
+            
+        # 3. 獲利達標偵測
+        elif p5_val > 0 and curr >= p5_val:
+            sell_signal = "💰 達標(短)"
+        elif p10_val > 0 and curr >= p10_val:
+            sell_signal = "💰 達標(中)"
+
+        # 買進訊號
+        signal = "⚪ 弱勢"
+        buy_at = 0.0
+        pass_threshold = 50 if r['id'].startswith("00") else 60
+        watch_threshold = 40
+
+        if t_score + r_score >= pass_threshold:
+            if t_score > r_score:
+                signal = "🔴 偏多"
+                buy_at = ma5
+            else:
+                signal = "💎 甜蜜"
+                buy_at = curr
+            if t_score + r_score >= 80: signal = "🔥 強力"
+        elif t_score + r_score >= watch_threshold:
+            signal = "🟡 蓄勢"
+            buy_at = ma5 * 0.98
+
+        if curr < buy_at: buy_at = curr
 
         return {
             "id": ticker,
-            "代號": display_name, # 這裡修正了！
+            "代號": STOCK_MAP.get(ticker, ticker),
             "現價": round(curr, 1),
             "技術分": t_score + r_score,
-            "趨勢分": t_score,
-            "抄底分": r_score,
-            "MA5": ma5,
+            "🎯買點": round(buy_at, 1) if buy_at > 0 else "-",
+            "💡AI判斷": signal,
+            "⚡賣出提示": sell_signal, # 新增這一欄
             "5日": p5, "10日": p10, "20日": p20,
             "停損": round(stop_loss, 1),
-            "倉位": position_scale,
-            "乖離": margin
+            "_sort": t_score + r_score
         }
     except: return None
 
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("⚖️ AI 智能操盤手 (完整顯示版)")
+st.title("💹 AI 股市全方位操盤手")
+st.caption("買賣訊號全揭露：告訴你買點，也提醒你賣點。")
 
-if st.button("🚀 啟動全維度分析", type="primary"):
-    with st.spinner('AI 正在進行多維度運算...'):
+if st.button("🚀 掃描買賣機會", type="primary"):
+    with st.spinner('AI 正在計算最佳進出場點位...'):
         raw = fetch_data(ALL_STOCKS)
         
         if raw is not None:
@@ -184,8 +205,8 @@ if st.button("🚀 啟動全維度分析", type="primary"):
                 r = calculate(t, raw[t])
                 if r: tech_res.append(r)
             
+            # 新聞過濾
             candidates = [r for r in tech_res if r['技術分'] >= 40]
-            
             news_map = {}
             with ThreadPoolExecutor(max_workers=5) as ex:
                 future_map = {ex.submit(get_news_score, c['id']): c['id'] for c in candidates}
@@ -196,45 +217,23 @@ if st.button("🚀 啟動全維度分析", type="primary"):
             final_data = []
             for r in tech_res:
                 n_score = news_map.get(r['id'], 0)
-                
-                signal = "⚪ 弱勢"
-                buy_at = 0.0
-                pass_threshold = 50 if r['id'].startswith("00") else 60
-                watch_threshold = 40
-
-                if r['技術分'] >= pass_threshold:
-                    if r['趨勢分'] > r['抄底分']:
-                        signal = "🔴 偏多"
-                        buy_at = r['MA5']
-                    else:
-                        signal = "💎 甜蜜"
-                        buy_at = r['現價']
-                    
-                    if r['技術分'] >= 80: signal = "🔥 強力"
-                elif r['技術分'] >= watch_threshold:
-                    signal = "🟡 蓄勢"
-                    buy_at = r['MA5'] * 0.98
-
-                if r['現價'] < buy_at: buy_at = r['現價']
+                signal = r['💡AI判斷']
+                buy_at = r['🎯買點']
 
                 if signal != "⚪ 弱勢":
-                    if n_score <= -5:
-                        signal = "⚠️ 有雷 (嚴重)"
-                    elif n_score <= -2:
-                        if "強力" in signal: signal = "🔴 偏多 (消息弱)"
-                        elif "甜蜜" in signal: signal = "🩸 恐懼貪婪"
-                    elif n_score >= 3:
+                    if n_score <= -4:
+                        if "甜蜜" in signal: signal = "🩸 恐懼貪婪" 
+                        else: 
+                            signal = "⚠️ 有雷"
+                            # 有雷時，建議不要買，但賣出提示依然有效(如果你手上有)
+                            buy_at = "-" 
+                    elif n_score >= 2:
                          if "蓄勢" in signal: signal = "🔴 轉強(雙確認)"
                          elif "強力" in signal or "偏多" in signal: signal += "(雙確認)"
 
-                note = ""
-                if buy_at > 0 and r['倉位'] < 1.0: note = " (高檔)"
-                if "甜蜜" in signal and r['乖離'] > 0.1: note = " (低估)"
-
-                r['💡AI判斷'] = signal + note
-                r['🎯買點'] = round(buy_at, 1) if buy_at > 0 else "-"
-                r['_sort'] = r['技術分'] + (n_score * 2)
-                
+                r['💡AI判斷'] = signal
+                r['🎯買點'] = buy_at
+                r['_sort'] = r['技術分'] + abs(n_score * 5)
                 final_data.append(r)
 
             df = pd.DataFrame(final_data)
@@ -245,27 +244,32 @@ if st.button("🚀 啟動全維度分析", type="primary"):
             def show(s_list):
                 sub = df[df['id'].isin(s_list)].copy()
                 if not sub.empty:
-                    def style(v):
+                    def style_buy(v):
                         if "恐懼" in v: return 'background-color: #8b0000; color: white; font-weight: bold'
                         if "強力" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
                         if "雙確認" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
                         if "偏多" in v: return 'background-color: #fff5e6; color: #d68910'
-                        if "轉強" in v: return 'background-color: #fff5e6; color: #d68910'
                         if "甜蜜" in v: return 'background-color: #e6fffa; color: #006666'
                         if "蓄勢" in v: return 'background-color: #ffffe0; color: #b7950b'
                         if "有雷" in v: return 'background-color: #ffe6e6; color: red; text-decoration: line-through'
                         return 'color: #cccccc'
+                    
+                    def style_sell(v):
+                        if "破線" in v: return 'color: white; background-color: #ff0000; font-weight: bold' # 紅底白字，快逃
+                        if "達標" in v: return 'color: #009900; font-weight: bold' # 綠字，賺錢
+                        if "過熱" in v: return 'color: #ff9900; font-weight: bold' # 橘字，小心
+                        return 'color: #cccccc'
 
-                    # 這裡加了 hide_index=True 來隱藏最左邊的數字索引
                     st.dataframe(
-                        sub.drop(columns=['id', '技術分', '趨勢分', '抄底分', 'MA5', '_sort', '倉位', '乖離']),
+                        sub.drop(columns=['id', '技術分', '_sort']),
                         use_container_width=True,
-                        hide_index=True, 
+                        hide_index=True,
                         column_config={
                             "代號": st.column_config.TextColumn(width="small"),
                             "現價": st.column_config.NumberColumn(format="%.1f", width="small"),
                             "🎯買點": st.column_config.TextColumn(width="small"),
-                            "💡AI判斷": st.column_config.TextColumn(width="large"),
+                            "💡AI判斷": st.column_config.TextColumn(width="medium"),
+                            "⚡賣出提示": st.column_config.TextColumn(width="small", help="若持有該股，請參考此欄位操作"),
                             "5日": st.column_config.TextColumn(width="small"),
                             "10日": st.column_config.TextColumn(width="small"),
                             "20日": st.column_config.TextColumn(width="small"),
