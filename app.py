@@ -9,7 +9,7 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="AI 智能操盤手 (分級權重版)", layout="wide", page_icon="⚖️")
+st.set_page_config(page_title="AI 智能操盤手 (完整顯示版)", layout="wide", page_icon="⚖️")
 
 # ==========================================
 # 📋 股票清單
@@ -59,45 +59,27 @@ ALL_STOCKS = [item for sublist in SECTORS.values() for item in sublist]
 def get_news_score(ticker):
     name = STOCK_MAP.get(ticker, ticker.replace(".TW",""))
     encoded_name = urllib.parse.quote(name)
-    # 抓過去 2 天新聞，反應即時
     rss_url = f"https://news.google.com/rss/search?q={encoded_name}+when:2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     try:
         feed = feedparser.parse(rss_url)
         if not feed.entries: return 0
         
-        score = 0
-        
-        # --- 定義關鍵字權重 ---
-        # Level 1: 輕微影響 (日常波動) -> 1分
         pos_L1 = ["買超", "回升", "反彈", "填息", "完銷", "股息"]
         neg_L1 = ["賣超", "調節", "震盪", "貼息", "疲弱"]
-        
-        # Level 2: 強烈影響 (趨勢改變) -> 3分
         pos_L2 = ["營收新高", "獲利翻倍", "大漲", "漲停", "強勢", "大單", "調升"]
         neg_L2 = ["重挫", "跌停", "跳水", "下修", "不如預期", "砍單"]
-        
-        # Level 3: 核彈級影響 (公司存亡) -> 10分 (直接改變命運)
         pos_L3 = ["併購", "收購"] 
         neg_L3 = ["違約", "假帳", "掏空", "搜索", "破產", "下市", "財報難產"]
 
+        score = 0
         for entry in feed.entries[:5]:
             t = entry.title
-            # 權重判斷
-            for w in pos_L3: 
-                if w in t: score += 10
-            for w in neg_L3: 
-                if w in t: score -= 10 # 核彈級利空，直接扣爆
-            
-            for w in pos_L2: 
-                if w in t: score += 3
-            for w in neg_L2: 
-                if w in t: score -= 3
-                
-            for w in pos_L1: 
-                if w in t: score += 1
-            for w in neg_L1: 
-                if w in t: score -= 1
-                
+            for w in pos_L3: score += 10
+            for w in neg_L3: score -= 10
+            for w in pos_L2: score += 3
+            for w in neg_L2: score -= 3
+            for w in pos_L1: score += 1
+            for w in neg_L1: score -= 1
         return score
     except: return 0
 
@@ -141,7 +123,7 @@ def calculate(ticker, df):
         if 0 < rsi < 30: r_score += 40
         elif 0 < rsi < rsi_limit: r_score += 20
         
-        # 價值濾網 (年線)
+        # 價值濾網
         ma240 = close.rolling(240).mean().iloc[-1]
         if pd.isna(ma240): ma240 = curr
         margin = (ma240 - curr) / ma240
@@ -156,7 +138,6 @@ def calculate(ticker, df):
             y = close.tail(20).values
             try:
                 s, _ = np.polyfit(x, y, 1)
-                # 只要不是暴跌，都給預測
                 if s > -10: 
                     p5 = f"{curr + s*5:.1f}"
                     p10 = f"{curr + s*10:.1f}"
@@ -168,9 +149,14 @@ def calculate(ticker, df):
 
         stop_loss = curr - (2.5 * atr)
 
+        # 修正：結合代號與名稱
+        clean_code = ticker.replace(".TW", "")
+        stock_name = STOCK_MAP.get(ticker, "")
+        display_name = f"{clean_code} {stock_name}"
+
         return {
             "id": ticker,
-            "代號": STOCK_MAP.get(ticker, ticker),
+            "代號": display_name, # 這裡修正了！
             "現價": round(curr, 1),
             "技術分": t_score + r_score,
             "趨勢分": t_score,
@@ -186,8 +172,7 @@ def calculate(ticker, df):
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("⚖️ AI 智能操盤手 (分級權重版)")
-st.caption("新聞系統升級：區分『小利空』與『核彈級利空』，不再因為風吹草動就誤判。")
+st.title("⚖️ AI 智能操盤手 (完整顯示版)")
 
 if st.button("🚀 啟動全維度分析", type="primary"):
     with st.spinner('AI 正在進行多維度運算...'):
@@ -232,29 +217,23 @@ if st.button("🚀 啟動全維度分析", type="primary"):
 
                 if r['現價'] < buy_at: buy_at = r['現價']
 
-                # --- 新聞濾網 (分級版) ---
                 if signal != "⚪ 弱勢":
-                    # 只有當分數低於 -5 (核彈級或多重重挫) 時，才顯示有雷
                     if n_score <= -5:
                         signal = "⚠️ 有雷 (嚴重)"
-                    # 普通壞消息 (-2 ~ -4)，只會讓強力變偏多，不會變成有雷
                     elif n_score <= -2:
                         if "強力" in signal: signal = "🔴 偏多 (消息弱)"
-                        elif "甜蜜" in signal: signal = "🩸 恐懼貪婪" # 小壞消息+跌深 = 貪婪時刻
-                    
-                    # 好消息加持
+                        elif "甜蜜" in signal: signal = "🩸 恐懼貪婪"
                     elif n_score >= 3:
                          if "蓄勢" in signal: signal = "🔴 轉強(雙確認)"
                          elif "強力" in signal or "偏多" in signal: signal += "(雙確認)"
 
-                # 價值濾網
                 note = ""
                 if buy_at > 0 and r['倉位'] < 1.0: note = " (高檔)"
                 if "甜蜜" in signal and r['乖離'] > 0.1: note = " (低估)"
 
                 r['💡AI判斷'] = signal + note
                 r['🎯買點'] = round(buy_at, 1) if buy_at > 0 else "-"
-                r['_sort'] = r['技術分'] + (n_score * 2) # 新聞權重適度調整
+                r['_sort'] = r['技術分'] + (n_score * 2)
                 
                 final_data.append(r)
 
@@ -277,9 +256,11 @@ if st.button("🚀 啟動全維度分析", type="primary"):
                         if "有雷" in v: return 'background-color: #ffe6e6; color: red; text-decoration: line-through'
                         return 'color: #cccccc'
 
+                    # 這裡加了 hide_index=True 來隱藏最左邊的數字索引
                     st.dataframe(
                         sub.drop(columns=['id', '技術分', '趨勢分', '抄底分', 'MA5', '_sort', '倉位', '乖離']),
                         use_container_width=True,
+                        hide_index=True, 
                         column_config={
                             "代號": st.column_config.TextColumn(width="small"),
                             "現價": st.column_config.NumberColumn(format="%.1f", width="small"),
