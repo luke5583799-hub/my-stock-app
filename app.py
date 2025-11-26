@@ -9,363 +9,433 @@ import urllib.parse
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
-# 技術指標庫
-from ta.trend import MACD, EMAIndicator, SMAIndicator, IchimokuIndicator
+# 引入技術指標運算
+from ta.trend import MACD, EMAIndicator, SMAIndicator, IchimokuIndicator, ADXIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.volume import OnBalanceVolumeIndicator, VolumeWeightedAveragePrice
 from ta.volatility import BollingerBands, AverageTrueRange
 
 # ==========================================
-# ⚙️ 系統配置 & 全局變數
+# ⚙️ 系統核心配置
 # ==========================================
-st.set_page_config(page_title="QuantHedge Pro | 法人級量化終端", layout="wide", page_icon="🏛️")
+st.set_page_config(page_title="HedgeFund OS | 法人決策系統", layout="wide", page_icon="🏛️")
 
-# CSS 優化
-st.markdown("""
-<style>
-    .metric-card {background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid #4CAF50;}
-    .bearish-card {background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid #FF5252;}
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 4px 4px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px; }
-    .stTabs [aria-selected="true"] { background-color: #4CAF50; color: white; }
-</style>
-""", unsafe_allow_html=True)
-
-# 股票池 (擴充版)
+# 股票清單 (完整版)
 SECTORS = {
     "🚀 電子權值": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2303.TW", "3711.TW", "3008.TW", "3045.TW"],
     "🤖 AI 供應鏈": ["3231.TW", "2356.TW", "6669.TW", "2382.TW", "2376.TW", "3017.TW", "2421.TW", "3035.TW", "3443.TW"],
     "🚢 傳產金融": ["2603.TW", "2609.TW", "2615.TW", "2002.TW", "1605.TW", "1513.TW", "1519.TW", "2881.TW", "2882.TW", "2891.TW", "5880.TW"],
     "📺 面板雙虎": ["3481.TW", "2409.TW"],
-    "📊 熱門 ETF": ["0050.TW", "0056.TW", "00878.TW", "00929.TW", "00919.TW", "00980A.TW", "00981A.TW", "00982A.TW"],
+    "📊 ETF": ["0050.TW", "0056.TW", "00878.TW", "00929.TW", "00919.TW", "00980A.TW", "00981A.TW", "00982A.TW"],
     "🇺🇸 美股七雄": ["NVDA", "TSLA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "AMD", "INTC", "PLTR", "SMCI", "COIN"]
 }
-ALL_TICKERS = [t for s in SECTORS.values() for t in s]
 
-# 中文對照表 (簡化版)
+# 映射表 (Ticker -> Name)
 NAME_MAP = {
-    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
-    "2603.TW": "長榮", "2421.TW": "建準", "3017.TW": "奇鋐", "6669.TW": "緯穎",
-    "3231.TW": "緯創", "2382.TW": "廣達", "0050.TW": "台灣50", "NVDA": "輝達"
+    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電", "2303.TW": "聯電",
+    "3711.TW": "日月光", "3008.TW": "大立光", "3045.TW": "台灣大", "3231.TW": "緯創", "2356.TW": "英業達",
+    "6669.TW": "緯穎", "2382.TW": "廣達", "2376.TW": "技嘉", "3017.TW": "奇鋐", "2421.TW": "建準",
+    "3035.TW": "智原", "3443.TW": "創意", "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海",
+    "2002.TW": "中鋼", "1605.TW": "華新", "1513.TW": "中興電", "1519.TW": "華城", "2881.TW": "富邦金",
+    "2882.TW": "國泰金", "2891.TW": "中信金", "5880.TW": "合庫金", "3481.TW": "群創", "2409.TW": "友達",
+    "0050.TW": "台灣50", "0056.TW": "高股息", "00878.TW": "國泰永續", "00929.TW": "復華科技", "00919.TW": "群益精選",
+    "00980A.TW": "野村趨勢", "00981A.TW": "統一動力", "00982A.TW": "群益強棒",
+    "NVDA": "輝達", "TSLA": "特斯拉", "AAPL": "蘋果", "MSFT": "微軟", "GOOG": "谷歌",
+    "AMZN": "亞馬遜", "META": "臉書", "AMD": "超微", "INTC": "英特爾", "PLTR": "帕蘭泰爾",
+    "SMCI": "美超微", "COIN": "Coinbase"
 }
 
 # ==========================================
-# 🏗️ Class: StockAnalyzer (核心分析引擎)
+# 🧱 模組一：數據工廠 (Data Factory)
 # ==========================================
-class StockAnalyzer:
+class DataEngine:
+    @staticmethod
+    @st.cache_data(ttl=300)
+    def get_market_data(tickers):
+        try:
+            # 抓取 2 年數據以計算長期指標 (如 200MA, 斐波那契)
+            data = yf.download(" ".join(tickers), period="2y", group_by='ticker', progress=False)
+            return data
+        except Exception as e:
+            return None
+
+    @staticmethod
+    def get_news_sentiment(ticker):
+        name = NAME_MAP.get(ticker, ticker.replace(".TW", ""))
+        encoded = urllib.parse.quote(name)
+        rss = f"https://news.google.com/rss/search?q={encoded}+when:2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        try:
+            feed = feedparser.parse(rss)
+            if not feed.entries: return 0, []
+            
+            pos_keys = ["營收", "獲利", "新高", "大單", "買超", "漲停", "強勢", "填息", "完銷", "反彈"]
+            neg_keys = ["虧損", "衰退", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
+            
+            score = 0
+            headlines = []
+            for entry in feed.entries[:3]:
+                t = entry.title
+                headlines.append(t)
+                for w in pos_keys: score += 1
+                for w in neg_keys: score -= 1.5
+            return score, headlines
+        except: return 0, []
+
+# ==========================================
+# 🧠 模組二：分析核心 (Alpha Engine)
+# ==========================================
+class AlphaEngine:
     def __init__(self, ticker, df):
         self.ticker = ticker
-        self.df = df
-        self.close = df['Close']
-        self.high = df['High']
-        self.low = df['Low']
-        self.volume = df['Volume']
-        self.name = NAME_MAP.get(ticker, ticker.replace(".TW", ""))
+        self.df = df.dropna(how='all')
+        self.close = self.df['Close']
+        self.high = self.df['High']
+        self.low = self.df['Low']
+        self.volume = self.df['Volume']
+        self.name = NAME_MAP.get(ticker, ticker)
         
-    def add_technical_indicators(self):
-        # 1. 趨勢指標 (Trend)
-        self.df['EMA20'] = EMAIndicator(self.close, window=20).ema_indicator()
-        self.df['EMA60'] = EMAIndicator(self.close, window=60).ema_indicator()
-        self.df['SMA200'] = SMAIndicator(self.close, window=200).sma_indicator()
-        
-        # MACD
-        macd = MACD(self.close)
-        self.df['MACD'] = macd.macd()
-        self.df['Signal'] = macd.macd_signal()
-        
-        # Ichimoku Cloud (一目均衡表 - 機構愛用)
-        ichimoku = IchimokuIndicator(self.high, self.low)
-        self.df['Ichimoku_Base'] = ichimoku.ichimoku_base_line()
-        self.df['Ichimoku_Conv'] = ichimoku.ichimoku_conversion_line()
-        self.df['Ichimoku_SpanA'] = ichimoku.ichimoku_a()
-        self.df['Ichimoku_SpanB'] = ichimoku.ichimoku_b()
+        # 自動計算指標
+        self._calculate_indicators()
 
-        # 2. 動能指標 (Momentum)
-        self.df['RSI'] = RSIIndicator(self.close).rsi()
-        stoch = StochasticOscillator(self.high, self.low, self.close)
-        self.df['KD_K'] = stoch.stoch()
-        self.df['KD_D'] = stoch.stoch_signal()
+    def _calculate_indicators(self):
+        # 趨勢
+        self.ema20 = EMAIndicator(self.close, window=20).ema_indicator()
+        self.ema60 = EMAIndicator(self.close, window=60).ema_indicator()
+        self.sma200 = SMAIndicator(self.close, window=200).sma_indicator()
+        
+        # 動能
+        self.rsi = RSIIndicator(self.close).rsi()
+        self.macd = MACD(self.close).macd()
+        self.signal = MACD(self.close).macd_signal()
+        
+        # 波動與量能
+        self.atr = AverageTrueRange(self.high, self.low, self.close).average_true_range()
+        self.obv = OnBalanceVolumeIndicator(self.close, self.volume).on_balance_volume()
+        self.bb_low = BollingerBands(self.close, window=20).bollinger_lband()
+        self.bb_high = BollingerBands(self.close, window=20).bollinger_hband()
 
-        # 3. 波動指標 (Volatility)
-        bb = BollingerBands(self.close, window=20, window_dev=2)
-        self.df['BB_High'] = bb.bollinger_hband()
-        self.df['BB_Low'] = bb.bollinger_lband()
-        self.df['ATR'] = AverageTrueRange(self.high, self.low, self.close).average_true_range()
-
-    def calculate_risk_metrics(self):
-        # 計算年化波動率與夏普值
-        returns = self.close.pct_change().dropna()
-        volatility = returns.std() * np.sqrt(252) # 年化波動率
-        
-        # 假設無風險利率 2%
-        sharpe_ratio = (returns.mean() * 252 - 0.02) / volatility if volatility > 0 else 0
-        
-        # 最大回撤 (Max Drawdown)
-        cum_returns = (1 + returns).cumprod()
-        peak = cum_returns.cummax()
-        drawdown = (cum_returns - peak) / peak
-        max_drawdown = drawdown.min()
-        
-        return volatility, sharpe_ratio, max_drawdown
-
-    def get_support_resistance(self):
-        # 簡單計算近期支撐壓力 (Pivot Points 概念)
-        recent_high = self.high.tail(60).max()
-        recent_low = self.low.tail(60).min()
-        
-        # 斐波那契回撤 (Fibonacci Retracement)
-        diff = recent_high - recent_low
-        fib_0382 = recent_high - 0.382 * diff
-        fib_0618 = recent_high - 0.618 * diff # 黃金分割支撐
-        
-        return recent_high, recent_low, fib_0618
-
-    def generate_signal(self):
-        curr = self.close.iloc[-1]
-        prev = self.close.iloc[-2]
-        ema20 = self.df['EMA20'].iloc[-1]
-        ema60 = self.df['EMA60'].iloc[-1]
-        rsi = self.df['RSI'].iloc[-1]
-        macd = self.df['MACD'].iloc[-1]
-        signal_line = self.df['Signal'].iloc[-1]
-        bb_low = self.df['BB_Low'].iloc[-1]
-        
+    def get_technical_score(self):
         score = 0
-        reasons = []
+        curr = self.close.iloc[-1]
         
-        # 趨勢評分
-        if curr > ema20 > ema60: 
-            score += 30
-            reasons.append("✅ 均線多頭排列")
-        elif curr < ema20 < ema60:
-            score -= 30
-            reasons.append("❌ 均線空頭排列")
-            
-        # 動能評分
-        if macd > signal_line:
-            score += 10
-            if macd > 0: score += 5
+        # 1. 趨勢濾網 (40分)
+        if curr > self.ema20.iloc[-1] > self.ema60.iloc[-1]: score += 40
+        elif curr > self.ema60.iloc[-1]: score += 20
         
-        # RSI 濾網
-        if 50 <= rsi <= 75: 
-            score += 10
-        elif rsi > 80:
-            score -= 20
-            reasons.append("⚠️ RSI 過熱警戒")
-        elif rsi < 30:
-            score += 20
-            reasons.append("💎 RSI 超賣 (潛在反彈)")
-            
-        # 布林通道抄底
-        if curr <= bb_low:
-            score += 20
-            reasons.append("📉 觸碰布林下軌 (超跌)")
+        # 2. 動能濾網 (30分)
+        if self.macd.iloc[-1] > self.signal.iloc[-1]: score += 15
+        if 50 <= self.rsi.iloc[-1] <= 75: score += 15
+        
+        # 3. 籌碼/量能 (30分)
+        # OBV 趨勢向上 (簡單判斷：現在 OBV > 20天前 OBV)
+        if len(self.obv) > 20 and self.obv.iloc[-1] > self.obv.iloc[-20]: score += 30
+        
+        return score
 
-        # 最終建議
-        action = "👀 觀望"
-        if score >= 60: action = "🔥 強力買進"
-        elif score >= 40: action = "🔴 偏多操作"
-        elif score <= -20: action = "🟢 建議放空/賣出"
+    def get_rebound_score(self):
+        # 專門計算「抄底」分數
+        score = 0
+        curr = self.close.iloc[-1]
         
-        return score, action, reasons
+        # RSI 超賣
+        if self.rsi.iloc[-1] < 30: score += 50
+        elif self.rsi.iloc[-1] < 40: score += 30
+        
+        # 觸碰布林下軌
+        if curr <= self.bb_low.iloc[-1]: score += 30
+        
+        # 乖離過大 (負乖離 > 10%)
+        bias = (curr - self.ema60.iloc[-1]) / self.ema60.iloc[-1]
+        if bias < -0.1: score += 20
+        
+        return score
+
+    def get_fibonacci_levels(self):
+        # 計算最近半年的高低點
+        recent_df = self.df.tail(120)
+        max_p = recent_df['High'].max()
+        min_p = recent_df['Low'].min()
+        diff = max_p - min_p
+        
+        # 支撐位
+        fib_0382 = max_p - (diff * 0.382)
+        fib_0500 = max_p - (diff * 0.5)
+        fib_0618 = max_p - (diff * 0.618) # 黃金支撐
+        
+        # 壓力位 (擴展)
+        fib_ext_1382 = max_p + (diff * 0.382)
+        
+        return fib_0618, fib_0382, fib_ext_1382, max_p
 
 # ==========================================
-# 📊 視覺化模組 (Plotly Charts)
+# ⚖️ 模組三：風險與資金管理 (Risk Engine)
 # ==========================================
-def plot_advanced_chart(analyzer):
-    df = analyzer.df.tail(120) # 只畫最近半年
+class RiskEngine:
+    @staticmethod
+    def calculate_kelly(df):
+        # 計算過去一年的回測數據來決定凱利倉位
+        try:
+            daily_ret = df['Close'].pct_change().dropna()
+            wins = daily_ret[daily_ret > 0]
+            losses = daily_ret[daily_ret < 0]
+            
+            if len(losses) == 0: return 0.5 # 極端情況
+            
+            win_rate = len(wins) / len(daily_ret)
+            avg_win = wins.mean()
+            avg_loss = abs(losses.mean())
+            
+            odds = avg_win / avg_loss
+            kelly = (odds * win_rate - (1 - win_rate)) / odds
+            
+            # 安全邊際：只用凱利值的 50%
+            return max(0, min(kelly * 0.5, 0.5)) 
+        except: return 0
+
+# ==========================================
+# 📝 模組四：交易執行 (Execution Engine)
+# ==========================================
+def generate_trade_plan(ticker, df, news_score):
+    engine = AlphaEngine(ticker, df)
+    
+    curr_price = df['Close'].iloc[-1]
+    curr_atr = engine.atr.iloc[-1]
+    
+    t_score = engine.get_technical_score()
+    r_score = engine.get_rebound_score()
+    fib_support, fib_res1, fib_target, recent_high = engine.get_fibonacci_levels()
+    
+    # --- 判斷多空方向 ---
+    signal = "⚪ 觀望"
+    buy_price = 0.0
+    stop_loss = 0.0
+    take_profit_1 = 0.0
+    take_profit_2 = 0.0
+    
+    # 1. 順勢交易 (Trend Following)
+    if t_score >= 60:
+        signal = "🔥 強力買進" if t_score >= 80 else "🔴 偏多操作"
+        # 順勢買點：回測 MA5 或 突破近期高點
+        ma5 = df['Close'].rolling(5).mean().iloc[-1]
+        buy_price = ma5
+        if curr_price < ma5: buy_price = curr_price # 已經回檔，現價買
+        
+        # 停損：2倍 ATR
+        stop_loss = buy_price - (2 * curr_atr)
+        # 停利：前高 或 斐波那契擴展
+        take_profit_1 = recent_high
+        take_profit_2 = fib_target
+
+    # 2. 逆勢交易 (Reversal)
+    elif r_score >= 50:
+        signal = "💎 甜蜜抄底"
+        # 抄底買點：現價 或 黃金分割支撐
+        buy_price = curr_price
+        # 停損：跌破布林下軌再下去一點
+        stop_loss = engine.bb_low.iloc[-1] - curr_atr
+        # 停利：反彈到月線(EMA20)
+        take_profit_1 = engine.ema20.iloc[-1]
+        take_profit_2 = engine.ema60.iloc[-1]
+
+    # --- 新聞濾網 (Circuit Breaker) ---
+    # 如果新聞極差，強制中止買入建議，保留賣出與停損建議
+    if news_score <= -2:
+        if "抄底" in signal:
+            signal = "🩸 恐懼接刀 (高險)" # 允許接刀但警告
+        else:
+            signal = "⚠️ 有雷 (暫緩)"
+            buy_price = 0 # 撤銷買單建議
+
+    # --- 賣出/減碼 邏輯 ---
+    sell_note = ""
+    if curr_price < (curr_price - 2*curr_atr): # 模擬持有
+        sell_note = "🛑 破線快逃"
+    elif engine.rsi.iloc[-1] > 75:
+        sell_note = "⚠️ 過熱減碼"
+    
+    # --- 凱利倉位 ---
+    kelly = RiskEngine.calculate_kelly(df)
+    
+    return {
+        "ticker": ticker,
+        "name": engine.name,
+        "price": curr_price,
+        "signal": signal,
+        "buy_price": buy_price,
+        "stop_loss": stop_loss,
+        "tp1": take_profit_1,
+        "tp2": take_profit_2,
+        "kelly": kelly,
+        "sell_note": sell_note,
+        "score": max(t_score, r_score) + (news_score * 5),
+        "rsi": engine.rsi.iloc[-1],
+        "engine": engine # 保留物件供繪圖用
+    }
+
+# ==========================================
+# 📊 模組五：視覺化 (Visualizer)
+# ==========================================
+def draw_chart(trade_plan):
+    engine = trade_plan['engine']
+    df = engine.df.tail(150)
     
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
-    # 1. K線圖 + 均線 + 布林
+    # K線
     fig.add_trace(go.Candlestick(x=df.index,
                 open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-                name='K線'), row=1, col=1)
+                name='Price'), row=1, col=1)
     
+    # 均線
     fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='orange', width=1), name='月線'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['EMA60'], line=dict(color='blue', width=1), name='季線'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['BB_High'], line=dict(color='gray', width=0.5, dash='dot'), name='布林上'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], line=dict(color='gray', width=0.5, dash='dot'), name='布林下'), row=1, col=1)
-
-    # 2. 成交量 + MACD
-    colors = ['red' if row['Open'] - row['Close'] >= 0 else 'green' for index, row in df.iterrows()]
-    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='成交量', opacity=0.3), row=2, col=1)
     
-    # 布局設定
+    # 買賣點標示 (如果有建議)
+    if trade_plan['buy_price'] > 0:
+        fig.add_hline(y=trade_plan['buy_price'], line_dash="dot", line_color="green", annotation_text="建議買點")
+    if trade_plan['stop_loss'] > 0:
+        fig.add_hline(y=trade_plan['stop_loss'], line_dash="dot", line_color="red", annotation_text="停損點")
+    if trade_plan['tp1'] > 0:
+        fig.add_hline(y=trade_plan['tp1'], line_dash="dot", line_color="gold", annotation_text="第一目標")
+
+    # 成交量
+    colors = ['red' if row['Open'] - row['Close'] >= 0 else 'green' for index, row in df.iterrows()]
+    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='Volume'), row=2, col=1)
+
     fig.update_layout(
-        title=f"{analyzer.name} ({analyzer.ticker}) 技術分析圖",
-        yaxis_title='股價',
+        title=f"{trade_plan['name']} ({trade_plan['ticker']}) 戰略分析圖",
+        yaxis_title='Price',
         xaxis_rangeslider_visible=False,
         height=600,
-        template="plotly_dark",
+        template="plotly_dark", # 使用深色主題看起來更專業
         margin=dict(l=0, r=0, t=30, b=0)
     )
     return fig
 
 # ==========================================
-# 🌐 數據獲取與新聞
-# ==========================================
-@st.cache_data(ttl=300)
-def get_data(tickers):
-    try: return yf.download(" ".join(tickers), period="2y", group_by='ticker', progress=False)
-    except: return None
-
-def get_news(ticker):
-    name = NAME_MAP.get(ticker, ticker.replace(".TW",""))
-    encoded = urllib.parse.quote(name)
-    rss = f"https://news.google.com/rss/search?q={encoded}+when:2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-    try:
-        feed = feedparser.parse(rss)
-        if not feed.entries: return []
-        return [{"title": e.title, "link": e.link} for e in feed.entries[:3]]
-    except: return []
-
-# ==========================================
-# 🖥️ 主程式邏輯 (Main Loop)
+# 🚀 主程式
 # ==========================================
 def main():
-    st.title("🏛️ QuantHedge Pro | 法人級量化終端")
-    
-    # 側邊欄：控制台
-    st.sidebar.header("🔧 控制台")
-    sector_select = st.sidebar.selectbox("選擇板塊", list(SECTORS.keys()))
-    selected_tickers = SECTORS[sector_select]
-    
-    if st.sidebar.button("🚀 啟動量化運算", type="primary"):
-        with st.spinner('正在連線彭博級數據源...'):
-            raw_data = get_data(selected_tickers)
+    # 側邊欄控制
+    with st.sidebar:
+        st.header("🎛️ 戰情控制台")
+        selected_sector = st.selectbox("選擇板塊", list(SECTORS.keys()))
+        run_btn = st.button("🚀 啟動量化運算", type="primary")
+        st.divider()
+        st.info("本系統採用：\n1. 雙均線趨勢策略\n2. RSI/布林逆勢策略\n3. 凱利公式資金控管\n4. 新聞情緒濾網")
+
+    st.title(f"🏛️ HedgeFund OS | {selected_sector}")
+
+    if run_btn:
+        target_tickers = SECTORS[selected_sector]
+        
+        with st.spinner('正在連線交易所數據庫...'):
+            raw_data = DataEngine.get_market_data(target_tickers)
             
             if raw_data is None:
-                st.error("數據獲取失敗，請稍後再試。")
+                st.error("數據源連線失敗")
                 return
 
-            # 分析結果容器
-            analysis_results = []
-            
+            # 並行運算加速
+            results = []
             progress = st.progress(0)
-            for i, ticker in enumerate(selected_tickers):
+            
+            # 新聞分析需要時間，我們只對前幾名做
+            # 先做技術分析排序
+            pre_results = []
+            for t in target_tickers:
                 try:
-                    # 處理數據
+                    # 處理數據結構
                     if isinstance(raw_data.columns, pd.MultiIndex):
-                        df = raw_data[ticker].copy()
+                        df = raw_data[t].copy()
                     else:
-                        df = raw_data.copy() # 單支股票情況
-                        
-                    df = df.dropna(how='all')
-                    if len(df) < 100: continue
+                        df = raw_data.copy()
                     
-                    # 初始化分析器
-                    analyzer = StockAnalyzer(ticker, df)
-                    analyzer.add_technical_indicators()
-                    
-                    # 計算指標
-                    vol, sharpe, mdd = analyzer.calculate_risk_metrics()
-                    high_p, low_p, fib = analyzer.get_support_resistance()
-                    score, signal, reasons = analyzer.generate_signal()
-                    
-                    # 凱利公式建議倉位 (基於夏普值簡化)
-                    # Sharpe > 1 建議 20%, Sharpe < 0 建議 0
-                    kelly_pos = min(max(sharpe * 0.2, 0), 0.5) 
-
-                    analysis_results.append({
-                        "analyzer": analyzer, # 儲存物件以便畫圖
-                        "代號": ticker,
-                        "名稱": analyzer.name,
-                        "現價": round(df['Close'].iloc[-1], 1),
-                        "信號": signal,
-                        "分數": score,
-                        "波動率": f"{vol*100:.1f}%",
-                        "夏普值": f"{sharpe:.2f}",
-                        "MDD": f"{mdd*100:.1f}%",
-                        "支撐(Fib)": round(fib, 1),
-                        "建議倉位": f"{kelly_pos*100:.0f}%",
-                        "_sort": score
-                    })
-                except Exception as e:
-                    continue
-                progress.progress((i + 1) / len(selected_tickers))
+                    # 預先計算分數
+                    eng = AlphaEngine(t, df)
+                    pre_results.append((t, df, max(eng.get_technical_score(), eng.get_rebound_score())))
+                except: continue
+            
+            # 排序後，只取前 10 名或有訊號的去抓新聞 (優化效能)
+            pre_results.sort(key=lambda x: x[2], reverse=True)
+            
+            for i, (ticker, df, raw_score) in enumerate(pre_results):
+                # 只對分數高於 40 的抓新聞，節省資源
+                n_score = 0
+                if raw_score >= 40:
+                    n_score, _ = DataEngine.get_news_sentiment(ticker)
+                
+                plan = generate_trade_plan(ticker, df, n_score)
+                if plan: results.append(plan)
+                progress.progress((i + 1) / len(pre_results))
             
             progress.empty()
-            
+
             # --- 顯示層 ---
-            if analysis_results:
-                df_res = pd.DataFrame(analysis_results)
-                df_res = df_res.sort_values(by='_sort', ascending=False)
+            if results:
+                final_df = pd.DataFrame(results)
+                final_df = final_df.sort_values(by='score', ascending=False)
                 
-                # 1. 戰情總表 (Dashboard)
-                st.subheader(f"📊 {sector_select} - 戰情總表")
+                # 1. 總覽表格 (Dashboard)
+                st.subheader("📋 戰略總表")
                 
                 def style_signal(v):
                     if "強力" in v: return 'background-color: #2e7d32; color: white; font-weight: bold'
-                    if "偏多" in v: return 'color: #2ecc71; font-weight: bold'
-                    if "放空" in v: return 'color: #ff5252; font-weight: bold'
+                    if "偏多" in v: return 'background-color: #e8f5e9; color: #2e7d32'
+                    if "甜蜜" in v: return 'background-color: #e3f2fd; color: #1565c0'
+                    if "有雷" in v: return 'background-color: #ffebee; color: #c62828; text-decoration: line-through'
+                    if "恐懼" in v: return 'background-color: #b71c1c; color: white; font-weight: bold'
                     return 'color: gray'
 
                 st.dataframe(
-                    df_res.drop(columns=['analyzer', '_sort']),
+                    final_df.drop(columns=['ticker', 'score', 'engine', 'sell_note', 'rsi']),
                     use_container_width=True,
                     column_config={
-                        "信號": st.column_config.TextColumn(width="medium"),
-                        "分數": st.column_config.ProgressColumn(format="%d", min_value=-50, max_value=100),
-                        "夏普值": st.column_config.NumberColumn(help="Sharpe Ratio: 越高代表風險調整後報酬越好 (>1 為佳)"),
-                        "MDD": st.column_config.TextColumn(help="最大回撤: 歷史最慘跌幅"),
-                        "建議倉位": st.column_config.ProgressColumn(format="%s", min_value=0, max_value=100)
+                        "name": st.column_config.TextColumn("股票名稱", width="small"),
+                        "price": st.column_config.NumberColumn("現價", format="%.1f"),
+                        "signal": st.column_config.TextColumn("AI 判斷", width="medium"),
+                        "buy_price": st.column_config.NumberColumn("🎯 建議買點", format="%.1f", help="建議掛單價格"),
+                        "tp1": st.column_config.NumberColumn("💰 第一停利", format="%.1f", help="短線目標"),
+                        "tp2": st.column_config.NumberColumn("🚀 第二停利", format="%.1f", help="波段目標"),
+                        "stop_loss": st.column_config.NumberColumn("🛑 停損價", format="%.1f", help="跌破必跑"),
+                        "kelly": st.column_config.ProgressColumn("建議倉位", format="%.0f%%", min_value=0, max_value=1)
                     }
                 )
                 
                 st.markdown("---")
+
+                # 2. 詳細戰術板 (Tactical Board)
+                st.subheader("🔍 戰術詳情 & K線圖")
                 
-                # 2. 深度分析 (點擊查看詳情)
-                st.subheader("🔍 個股深度診斷 (含 K線圖 & 新聞)")
-                
-                selected_stock = st.selectbox("請選擇要查看的股票", df_res['代號'] + " " + df_res['名稱'])
-                target_code = selected_stock.split(" ")[0]
-                
-                # 找出對應的 analyzer 物件
-                target_row = next(item for item in analysis_results if item["代號"] == target_code)
-                analyzer = target_row['analyzer']
-                
-                col1, col2 = st.columns([2, 1])
+                col1, col2 = st.columns([1, 3])
                 
                 with col1:
-                    # 繪製互動式圖表
-                    fig = plot_advanced_chart(analyzer)
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    # 右側數據面板
-                    st.markdown(f"### 📝 {analyzer.name} 診斷報告")
+                    selected_stock = st.radio("選擇股票查看詳情", final_df['name'] + " (" + final_df['ticker'] + ")")
+                    sel_ticker = selected_stock.split("(")[1].replace(")", "")
+                    sel_plan = next(p for p in results if p['ticker'] == sel_ticker)
                     
-                    curr_price = target_row['現價']
-                    fib = target_row['支撐(Fib)']
-                    dist_to_support = (curr_price - fib) / curr_price * 100
-                    
-                    # 風險指標卡片
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <h4>🎯 交易策略</h4>
-                        <p><b>AI 判斷：</b> {target_row['信號']}</p>
-                        <p><b>技術分數：</b> {target_row['分數']} 分</p>
-                        <p><b>黃金支撐 (0.618)：</b> {fib}</p>
-                        <p><b>離支撐距離：</b> {dist_to_support:.1f}%</p>
-                    </div>
-                    <br>
-                    <div class="metric-card" style="border-left: 5px solid #2196F3;">
-                        <h4>🛡️ 風險控管 (Risk)</h4>
-                        <p><b>年化波動率：</b> {target_row['波動率']}</p>
-                        <p><b>夏普比率：</b> {target_row['夏普值']} (越高越好)</p>
-                        <p><b>最大回撤 (MDD)：</b> {target_row['MDD']}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # 即時新聞
-                    st.markdown("#### 📰 最新情報")
-                    news_list = get_news(target_code)
-                    if news_list:
-                        for n in news_list:
-                            st.markdown(f"- [{n['title']}]({n['link']})")
+                    # 交易卡片
+                    st.info(f"**{sel_plan['name']} 交易計畫**")
+                    if sel_plan['buy_price'] > 0:
+                        st.markdown(f"🟢 **買進：** {sel_plan['buy_price']:.1f}")
+                        st.markdown(f"🔴 **停損：** {sel_plan['stop_loss']:.1f} (-{(sel_plan['price']-sel_plan['stop_loss'])/sel_plan['price']*100:.1f}%)")
+                        st.markdown(f"💰 **獲利：** {sel_plan['tp1']:.1f} (+{(sel_plan['tp1']-sel_plan['price'])/sel_plan['price']*100:.1f}%)")
+                        
+                        risk_reward = (sel_plan['tp1'] - sel_plan['buy_price']) / (sel_plan['buy_price'] - sel_plan['stop_loss'])
+                        st.markdown(f"⚖️ **盈虧比：** 1 : {risk_reward:.1f}")
                     else:
-                        st.info("暫無相關重大新聞")
+                        st.warning("目前不建議進場 (觀望或有雷)")
+                    
+                    if sel_plan['sell_note']:
+                        st.error(f"⚠️ 持有警告：{sel_plan['sell_note']}")
+
+                with col2:
+                    # 畫圖
+                    st.plotly_chart(draw_chart(sel_plan), use_container_width=True)
+
+            else:
+                st.info("目前無符合條件的股票，建議空手觀望。")
 
 if __name__ == "__main__":
     main()
