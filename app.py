@@ -9,7 +9,7 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="AI 終極操盤手 (完美融合版)", layout="wide", page_icon="👑")
+st.set_page_config(page_title="AI 智能操盤手 (分級權重版)", layout="wide", page_icon="⚖️")
 
 # ==========================================
 # 📋 股票清單
@@ -54,22 +54,50 @@ SECTORS = {
 ALL_STOCKS = [item for sublist in SECTORS.values() for item in sublist]
 
 # ==========================================
-# 📰 新聞分析 (精準版)
+# 📰 新聞分析 (分級權重版)
 # ==========================================
 def get_news_score(ticker):
     name = STOCK_MAP.get(ticker, ticker.replace(".TW",""))
     encoded_name = urllib.parse.quote(name)
+    # 抓過去 2 天新聞，反應即時
     rss_url = f"https://news.google.com/rss/search?q={encoded_name}+when:2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     try:
         feed = feedparser.parse(rss_url)
         if not feed.entries: return 0
-        pos = ["營收", "獲利", "新高", "大單", "買超", "調升", "漲停", "強勢", "填息", "完銷", "反彈", "回升", "大漲"]
-        neg = ["虧損", "衰退", "賣超", "調降", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
+        
         score = 0
+        
+        # --- 定義關鍵字權重 ---
+        # Level 1: 輕微影響 (日常波動) -> 1分
+        pos_L1 = ["買超", "回升", "反彈", "填息", "完銷", "股息"]
+        neg_L1 = ["賣超", "調節", "震盪", "貼息", "疲弱"]
+        
+        # Level 2: 強烈影響 (趨勢改變) -> 3分
+        pos_L2 = ["營收新高", "獲利翻倍", "大漲", "漲停", "強勢", "大單", "調升"]
+        neg_L2 = ["重挫", "跌停", "跳水", "下修", "不如預期", "砍單"]
+        
+        # Level 3: 核彈級影響 (公司存亡) -> 10分 (直接改變命運)
+        pos_L3 = ["併購", "收購"] 
+        neg_L3 = ["違約", "假帳", "掏空", "搜索", "破產", "下市", "財報難產"]
+
         for entry in feed.entries[:5]:
             t = entry.title
-            for w in pos: score += 1
-            for w in neg: score -= 1.5 # 適度扣分
+            # 權重判斷
+            for w in pos_L3: 
+                if w in t: score += 10
+            for w in neg_L3: 
+                if w in t: score -= 10 # 核彈級利空，直接扣爆
+            
+            for w in pos_L2: 
+                if w in t: score += 3
+            for w in neg_L2: 
+                if w in t: score -= 3
+                
+            for w in pos_L1: 
+                if w in t: score += 1
+            for w in neg_L1: 
+                if w in t: score -= 1
+                
         return score
     except: return 0
 
@@ -85,13 +113,13 @@ def calculate(ticker, df):
     try:
         if isinstance(df.columns, pd.MultiIndex): df = df.xs(ticker, axis=1, level=0)
         df = df.dropna(how='all')
-        if len(df) < 50: return None # 需要足夠數據
+        if len(df) < 50: return None
 
         close = df['Close']
         curr = close.iloc[-1]
         is_etf = ticker.startswith("00") or ticker.endswith("A.TW")
 
-        # --- 1. 技術面 ---
+        # 指標
         def safe(func): 
             try: return func()
             except: return pd.Series([0]*len(close))
@@ -102,6 +130,7 @@ def calculate(ticker, df):
         atr = safe(lambda: AverageTrueRange(high=df['High'], low=df['Low'], close=close).average_true_range()).iloc[-1]
         ma5 = close.rolling(5).mean().iloc[-1]
 
+        # 評分
         t_score = 0
         r_score = 0
         if curr > ema20 > ema60: t_score += 40
@@ -112,37 +141,32 @@ def calculate(ticker, df):
         if 0 < rsi < 30: r_score += 40
         elif 0 < rsi < rsi_limit: r_score += 20
         
-        # --- 2. 價值面 (李永樂估值與凱利概念) ---
-        # 簡單估值：使用年線乖離 (因無法即時抓 EPS)
+        # 價值濾網 (年線)
         ma240 = close.rolling(240).mean().iloc[-1]
         if pd.isna(ma240): ma240 = curr
-        
-        # 安全邊際
         margin = (ma240 - curr) / ma240
-        
-        # 凱利倉位調整係數 (0.0 ~ 1.0)
-        # 如果太貴 (乖離年線 > 20%)，倉位打折
         position_scale = 1.0
-        if curr > ma240 * 1.2: position_scale = 0.5 # 過熱減碼
-        elif curr < ma240 * 0.8: position_scale = 1.0 # 便宜加碼
+        if curr > ma240 * 1.2: position_scale = 0.5
+        elif curr < ma240 * 0.8: position_scale = 1.0
 
-        # --- 3. 預測目標 ---
+        # 預測
         p5, p10, p20 = "-", "-", "-"
         if len(close) > 20:
             x = np.arange(len(close.tail(20)))
             y = close.tail(20).values
             try:
                 s, _ = np.polyfit(x, y, 1)
-                if s > -0.5: # 只要不是暴跌趨勢
+                # 只要不是暴跌，都給預測
+                if s > -10: 
                     p5 = f"{curr + s*5:.1f}"
                     p10 = f"{curr + s*10:.1f}"
                     p20 = f"{curr + s*20:.1f}"
-                elif r_score >= 20: # 反彈
+                elif r_score >= 20:
                     target = ema20 if ema20 > curr else curr*1.03
                     p5 = f"{target:.1f}"
             except: pass
 
-        stop_loss = curr - (2.5 * atr) # 稍微寬一點的停損
+        stop_loss = curr - (2.5 * atr)
 
         return {
             "id": ticker,
@@ -154,16 +178,16 @@ def calculate(ticker, df):
             "MA5": ma5,
             "5日": p5, "10日": p10, "20日": p20,
             "停損": round(stop_loss, 1),
-            "倉位": position_scale, # 用於建議
-            "乖離": margin # 用於判斷便宜還是貴
+            "倉位": position_scale,
+            "乖離": margin
         }
     except: return None
 
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("👑 AI 終極操盤手 (完美融合版)")
-st.caption("結合「技術趨勢」、「新聞過濾」、「價值估算」的三合一決策系統。")
+st.title("⚖️ AI 智能操盤手 (分級權重版)")
+st.caption("新聞系統升級：區分『小利空』與『核彈級利空』，不再因為風吹草動就誤判。")
 
 if st.button("🚀 啟動全維度分析", type="primary"):
     with st.spinner('AI 正在進行多維度運算...'):
@@ -193,7 +217,6 @@ if st.button("🚀 啟動全維度分析", type="primary"):
                 pass_threshold = 50 if r['id'].startswith("00") else 60
                 watch_threshold = 40
 
-                # 基礎技術判斷
                 if r['技術分'] >= pass_threshold:
                     if r['趨勢分'] > r['抄底分']:
                         signal = "🔴 偏多"
@@ -205,35 +228,33 @@ if st.button("🚀 啟動全維度分析", type="primary"):
                     if r['技術分'] >= 80: signal = "🔥 強力"
                 elif r['技術分'] >= watch_threshold:
                     signal = "🟡 蓄勢"
-                    buy_at = 0
+                    buy_at = r['MA5'] * 0.98
 
                 if r['現價'] < buy_at: buy_at = r['現價']
 
-                # 新聞濾網
+                # --- 新聞濾網 (分級版) ---
                 if signal != "⚪ 弱勢":
-                    if n_score <= -3:
-                        if "甜蜜" in signal:
-                             signal = "🩸 恐懼貪婪" # 價值投資機會
-                             buy_at = r['現價']
-                        else:
-                             signal = "⚠️ 有雷"
-                             buy_at = 0
-                             r['5日'] = r['10日'] = r['20日'] = "-"
-                    elif n_score >= 2:
+                    # 只有當分數低於 -5 (核彈級或多重重挫) 時，才顯示有雷
+                    if n_score <= -5:
+                        signal = "⚠️ 有雷 (嚴重)"
+                    # 普通壞消息 (-2 ~ -4)，只會讓強力變偏多，不會變成有雷
+                    elif n_score <= -2:
+                        if "強力" in signal: signal = "🔴 偏多 (消息弱)"
+                        elif "甜蜜" in signal: signal = "🩸 恐懼貪婪" # 小壞消息+跌深 = 貪婪時刻
+                    
+                    # 好消息加持
+                    elif n_score >= 3:
                          if "蓄勢" in signal: signal = "🔴 轉強(雙確認)"
                          elif "強力" in signal or "偏多" in signal: signal += "(雙確認)"
 
-                # 價值濾網 (凱利概念)
-                # 如果技術面叫你買，但價值面顯示太貴(乖離率負很多)，AI會提醒減碼
+                # 價值濾網
                 note = ""
-                if buy_at > 0 and r['倉位'] < 1.0:
-                    note = " (高檔留意風險)"
-                if "甜蜜" in signal and r['乖離'] > 0.1:
-                    note = " (價值低估)" # 雙重加分
+                if buy_at > 0 and r['倉位'] < 1.0: note = " (高檔)"
+                if "甜蜜" in signal and r['乖離'] > 0.1: note = " (低估)"
 
                 r['💡AI判斷'] = signal + note
                 r['🎯買點'] = round(buy_at, 1) if buy_at > 0 else "-"
-                r['_sort'] = r['技術分'] + abs(n_score * 5)
+                r['_sort'] = r['技術分'] + (n_score * 2) # 新聞權重適度調整
                 
                 final_data.append(r)
 
