@@ -12,24 +12,35 @@ from concurrent.futures import ThreadPoolExecutor
 # 📚 技術指標庫
 from ta.trend import MACD, EMAIndicator, SMAIndicator, IchimokuIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.volume import OnBalanceVolumeIndicator, ForceIndexIndicator
+from ta.volume import OnBalanceVolumeIndicator, MFIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
 # ==========================================
 # ⚙️ 系統全域配置
 # ==========================================
-st.set_page_config(page_title="HedgeFund OS | 法人決策系統", layout="wide", page_icon="🏛️")
+st.set_page_config(page_title="HedgeFund OS | 資金流向版", layout="wide", page_icon="🏛️")
 
-# 強制 CSS 修復圖表刷新與介面美化
+# CSS 優化：將深色卡片改為淺色清爽風格
 st.markdown("""
 <style>
     .stPlotlyChart { width: 100%; }
-    div[data-testid="stMetric"] { background-color: #262730; padding: 15px; border-radius: 5px; border: 1px solid #444; }
+    /* 診斷卡片樣式優化 */
+    .info-card {
+        background-color: #f8f9fa; 
+        padding: 20px; 
+        border-radius: 10px; 
+        border: 1px solid #e0e0e0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        color: #333333;
+    }
+    .info-card h3 { color: #0066cc; margin-top: 0; }
+    .info-card p { font-size: 16px; margin: 8px 0; }
+    .highlight { font-weight: bold; color: #d63384; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 📋 股票清單 (完整補齊中文名)
+# 📋 股票清單
 # ==========================================
 SECTORS = {
     "🚀 電子權值": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2303.TW", "3711.TW", "3008.TW", "3045.TW"],
@@ -42,7 +53,6 @@ SECTORS = {
     "🇺🇸 美股七雄+": ["NVDA", "TSLA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "AMD", "INTC", "PLTR", "SMCI", "COIN"]
 }
 
-# 完整對照表
 NAME_MAP = {
     "2330.TW": "台積電", "2454.TW": "聯發科", "3711.TW": "日月光", "3661.TW": "世芯-KY", "3443.TW": "創意",
     "2317.TW": "鴻海", "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
@@ -61,7 +71,6 @@ NAME_MAP = {
     "SMCI": "美超微", "COIN": "Coinbase"
 }
 
-# 自動生成扁平清單
 ALL_TICKERS = [t for s in SECTORS.values() for t in s]
 
 # ==========================================
@@ -78,7 +87,6 @@ class DataService:
 
     @staticmethod
     def get_news_sentiment(ticker):
-        # 修正：確保名稱對應正確
         name = NAME_MAP.get(ticker, ticker.replace(".TW", ""))
         encoded = urllib.parse.quote(name)
         rss = f"https://news.google.com/rss/search?q={encoded}+when:3d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
@@ -86,9 +94,8 @@ class DataService:
             feed = feedparser.parse(rss)
             if not feed.entries: return 0, []
             
-            pos_keys = ["營收", "獲利", "新高", "大單", "買超", "漲停", "強勢", "填息", "完銷", "反彈", "噴出"]
-            neg_keys = ["虧損", "衰退", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底", "不如預期"]
-            
+            pos_keys = ["營收", "獲利", "新高", "大單", "買超", "漲停", "強勢", "填息", "完銷", "反彈"]
+            neg_keys = ["虧損", "衰退", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
             score = 0
             headlines = []
             for entry in feed.entries[:3]:
@@ -100,18 +107,17 @@ class DataService:
         except: return 0, []
 
 # ==========================================
-# 🧠 分析層
+# 🧠 分析層 (新增 MFI 資金流)
 # ==========================================
 class QuantAnalyzer:
     def __init__(self, ticker, df):
         self.ticker = ticker
-        self.df = df.copy()
+        self.df = df.dropna(how='all').copy()
         self.close = self.df['Close']
         self.high = self.df['High']
         self.low = self.df['Low']
         self.volume = self.df['Volume']
         
-        # 標準化名稱：代號 + 中文
         cn_name = NAME_MAP.get(ticker, "")
         clean_ticker = ticker.replace(".TW", "")
         self.display_name = f"{clean_ticker} {cn_name}"
@@ -126,36 +132,54 @@ class QuantAnalyzer:
         self.df['EMA60'] = EMAIndicator(self.close, window=60).ema_indicator()
         
         macd = MACD(self.close)
-        self.df['MACD'] = macd.macd()
-        self.df['Signal'] = macd.macd_signal()
+        self.df['MACD'] = macd.macd().fillna(0)
+        self.df['Signal'] = macd.macd_signal().fillna(0)
         
-        self.df['RSI'] = RSIIndicator(self.close).rsi()
+        self.df['RSI'] = RSIIndicator(self.close).rsi().fillna(50)
+        
+        # 新增 MFI (資金流向指標)
+        self.df['MFI'] = MFIIndicator(self.high, self.low, self.close, self.volume, window=14).money_flow_index().fillna(50)
         
         bb = BollingerBands(self.close, window=20, window_dev=2)
         self.df['BB_High'] = bb.bollinger_hband()
         self.df['BB_Low'] = bb.bollinger_lband()
-        self.df['ATR'] = AverageTrueRange(self.high, self.low, self.close).average_true_range()
         
-        self.df['OBV'] = OnBalanceVolumeIndicator(self.close, self.volume).on_balance_volume()
+        self.df['ATR'] = AverageTrueRange(self.high, self.low, self.close).average_true_range().fillna(0)
 
     def get_scores(self):
-        score = 0
-        curr = self.close.iloc[-1]
+        t_score = 0
+        r_score = 0
         
-        # 趨勢
-        if curr > self.df['EMA20'].iloc[-1]: score += 20
-        if self.df['EMA20'].iloc[-1] > self.df['EMA60'].iloc[-1]: score += 20
-        
-        # 動能
-        if self.df['MACD'].iloc[-1] > self.df['Signal'].iloc[-1]: score += 15
-        rsi = self.df['RSI'].iloc[-1]
-        if 50 <= rsi <= 75: score += 15
-        elif rsi < 30: score += 30
-        
-        # 通道
-        if curr <= self.df['BB_Low'].iloc[-1]: score += 20
-        
-        return score, rsi
+        try:
+            curr = self.close.iloc[-1]
+            ema20 = self.df['EMA20'].iloc[-1]
+            ema60 = self.df['EMA60'].iloc[-1]
+            mfi = self.df['MFI'].iloc[-1]
+            
+            # 趨勢分 (Trend)
+            if curr > ema20 > ema60: t_score += 30
+            elif curr > ema60: t_score += 15
+            
+            # 動能分 (Momentum)
+            if self.df['MACD'].iloc[-1] > self.df['Signal'].iloc[-1]: t_score += 15
+            rsi = self.df['RSI'].iloc[-1]
+            if 50 <= rsi <= 75: t_score += 15
+            
+            # 資金流分 (Smart Money) - 新增!
+            if mfi > 60: t_score += 20 # 資金流入強勁
+            
+            # 抄底分 (Reversal)
+            # 如果價格跌但 MFI 沒跌 (背離)，是好的抄底訊號
+            if rsi < 30: r_score += 40
+            elif rsi < 40: r_score += 20
+            
+            if curr <= self.df['BB_Low'].iloc[-1]: r_score += 30
+            
+            # MFI 恐慌底部
+            if mfi < 20: r_score += 10 
+            
+        except: pass
+        return t_score, r_score
 
     def calculate_kelly(self):
         try:
@@ -180,12 +204,12 @@ def generate_strategy(ticker, df, news_score):
     analyzer = QuantAnalyzer(ticker, df)
     
     curr_price = analyzer.close.iloc[-1]
-    score, rsi = analyzer.get_scores()
+    t_score, r_score = analyzer.get_scores()
+    mfi_val = analyzer.df['MFI'].iloc[-1]
     
-    total_score = score + (news_score * 3)
+    total_score = t_score + (news_score * 3)
     
     signal = "⚪ 觀望"
-    # 即使觀望，也計算地板支撐價 (布林下軌) 作為參考
     buy_price = analyzer.df['BB_Low'].iloc[-1] 
     
     ma5 = analyzer.close.rolling(5).mean().iloc[-1]
@@ -196,64 +220,74 @@ def generate_strategy(ticker, df, news_score):
     elif total_score >= 60:
         signal = "🔴 偏多操作"
         buy_price = ma5 if curr_price > ma5 else curr_price
-    elif rsi < 40 and total_score >= 40:
+    elif r_score >= 40:
         signal = "💎 甜蜜抄底"
         buy_price = analyzer.df['BB_Low'].iloc[-1]
     
     if news_score <= -3:
         signal = "⚠️ 風險警示"
-        buy_price = 0 # 只有這時候才歸零
+        buy_price = 0 
     
     atr = analyzer.df['ATR'].iloc[-1]
-    stop_loss = curr_price - (2.5 * atr)
+    stop_loss = curr_price - (2.5 * atr) if buy_price > 0 else 0
     target_1 = curr_price + (3 * atr)
     kelly = analyzer.calculate_kelly()
     
+    sell_note = ""
+    if stop_loss > 0 and curr_price < stop_loss: sell_note = "🛑 破線快逃"
+    elif analyzer.df['RSI'].iloc[-1] > 75: sell_note = "⚠️ 過熱減碼"
+
     return {
         "info": {
-            "id": analyzer.display_name, # 使用標準化名稱
-            "ticker_code": ticker, # 保留原始代號供繪圖用
+            "id": analyzer.display_name,
+            "ticker_code": ticker,
             "price": curr_price,
             "signal": signal,
             "buy": buy_price,
             "stop": stop_loss,
             "target": target_1,
             "kelly": kelly,
-            "score": total_score,
-            "rsi": rsi
+            "score": max(total_score, r_score),
+            "mfi": mfi_val, # 新增顯示 MFI
+            "sell_note": sell_note
         },
         "analyzer": analyzer
     }
 
 # ==========================================
-# 🎨 視覺層
+# 🎨 視覺層 (中文化圖表)
 # ==========================================
 def draw_chart(analyzer):
     df = analyzer.df.tail(150)
     
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.03, row_heights=[0.7, 0.3])
+                        vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
+    # K線
     fig.add_trace(go.Candlestick(x=df.index,
                 open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
                 name='K線'), row=1, col=1)
     
-    # 安全繪圖：檢查欄位是否存在
     if 'EMA20' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#FFD700', width=1.5), name='月線'), row=1, col=1)
     if 'EMA60' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['EMA60'], line=dict(color='#00BFFF', width=1.5), name='季線'), row=1, col=1)
     
+    # 成交量
     colors = ['#ef5350' if row['Open'] - row['Close'] >= 0 else '#26a69a' for index, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
     
+    # 設定時間軸格式為：2025/05
+    fig.update_xaxes(tickformat="%Y/%m")
+
     fig.update_layout(
         title=f"<b>{analyzer.display_name}</b> 技術分析",
         yaxis_title='價格',
         xaxis_rangeslider_visible=False,
         height=600,
-        template="plotly_dark",
-        margin=dict(l=10, r=10, t=40, b=10)
+        template="plotly_white", # 改用白底清楚模式
+        margin=dict(l=10, r=10, t=40, b=10),
+        font=dict(family="Microsoft JhengHei") # 嘗試指定字體
     )
     return fig
 
@@ -306,51 +340,51 @@ def main():
             with col_left:
                 st.subheader("📋 交易決策總表")
                 st.dataframe(
-                    df_display.drop(columns=['ticker_code', 'score', 'rsi']),
+                    df_display.drop(columns=['ticker_code', 'score', 'sell_note']),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "id": st.column_config.TextColumn("股票名稱", width="medium"),
+                        "id": st.column_config.TextColumn("名稱", width="small"),
                         "price": st.column_config.NumberColumn("現價", format="%.1f"),
                         "signal": st.column_config.TextColumn("AI 判斷", width="medium"),
-                        "buy": st.column_config.NumberColumn("🎯 建議買點", format="%.1f"),
+                        "mfi": st.column_config.NumberColumn("MFI資金", format="%.0f", help="資金流向指數 (>80過熱, <20超賣)"),
+                        "buy": st.column_config.NumberColumn("🎯 買點", format="%.1f"),
                         "stop": st.column_config.NumberColumn("🛑 停損", format="%.1f"),
-                        "target": st.column_config.NumberColumn("💰 目標價", format="%.1f"),
-                        "kelly": st.column_config.ProgressColumn("建議倉位", format="%.0f%%", min_value=0, max_value=1),
+                        "target": st.column_config.NumberColumn("💰 目標", format="%.1f"),
+                        "kelly": st.column_config.ProgressColumn("倉位", format="%.0f%%", min_value=0, max_value=1),
                     }
                 )
 
             with col_right:
                 st.subheader("🔍 戰術分析")
-                # 這裡的選項現在是 "2330 台積電"，不會有重複
                 selected_id = st.selectbox("選擇股票", df_display['id'], key='stock_selector')
-                
-                # 找出對應策略
                 sel_strategy = next(s for s in strategies if s['info']['id'] == selected_id)
                 info = sel_strategy['info']
-                sel_ticker_code = info['ticker_code'] # 用於抓新聞
                 
+                # CSS 美化後的卡片
                 st.markdown(f"""
-                <div style="background-color: #262730; padding: 15px; border-radius: 10px; border: 1px solid #555;">
-                    <h3 style="color: #FFD700; margin:0;">{info['id']}</h3>
-                    <hr style="margin: 10px 0;">
+                <div class="info-card">
+                    <h3>{info['id']}</h3>
                     <p><b>🔥 訊號：</b> {info['signal']}</p>
-                    <p><b>📊 綜合分數：</b> {info['score']:.0f} 分</p>
-                    <p><b>📈 RSI 強度：</b> {info['rsi']:.1f}</p>
+                    <p><b>🌊 MFI 資金流：</b> {info['mfi']:.1f} <span style='color:gray;font-size:0.8em'>(>60資金進駐)</span></p>
                     <p><b>🏦 建議倉位：</b> {info['kelly']*100:.0f}%</p>
+                    <hr>
+                    <p><b>🎯 建議買點：</b> <span class="highlight">{info['buy']:.1f}</span></p>
+                    <p><b>🛑 停損防守：</b> {info['stop']:.1f}</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
-                with st.expander("📰 查看最新新聞", expanded=False):
-                    _, headlines = DataService.get_news_sentiment(sel_ticker_code)
+                if info['sell_note']:
+                    st.error(f"⚠️ 持有警告：{info['sell_note']}")
+
+                with st.expander("📰 最新新聞", expanded=False):
+                    _, headlines = DataService.get_news_sentiment(info['ticker_code'])
                     if headlines:
                         for h in headlines:
                             st.markdown(f"- [{h['title']}]({h['link']})")
-                    else:
-                        st.write("暫無重大新聞")
+                    else: st.write("暫無新聞")
 
             st.markdown("---")
-            # 強制重繪圖表
             if selected_id:
                 fig = draw_chart(sel_strategy['analyzer'])
                 st.plotly_chart(fig, use_container_width=True, key=f"chart_{info['ticker_code']}")
