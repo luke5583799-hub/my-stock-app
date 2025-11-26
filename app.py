@@ -9,7 +9,7 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="AI 股市雷達 (全監控)", layout="wide", page_icon="📡")
+st.set_page_config(page_title="AI 股市雷達 (即時修正版)", layout="wide", page_icon="📡")
 
 # ==========================================
 # 📋 股票與中文名稱對照表
@@ -20,6 +20,7 @@ STOCK_MAP = {
     "2303.TW": "聯電", "2382.TW": "廣達", "3711.TW": "日月光", "3034.TW": "聯詠",
     "3035.TW": "智原", "3231.TW": "緯創", "2356.TW": "英業達", "6669.TW": "緯穎",
     "2376.TW": "技嘉", "3017.TW": "奇鋐", "2421.TW": "建準", "2412.TW": "中華電",
+    "3481.TW": "群創", "2409.TW": "友達",
     # 傳產/金融
     "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航",
     "2002.TW": "中鋼", "1605.TW": "華新", "1513.TW": "中興電", "1519.TW": "華城",
@@ -39,7 +40,8 @@ STOCK_MAP = {
 SECTORS = {
     "🚀 電子/AI": [
         "2330.TW", "2317.TW", "2454.TW", "2308.TW", "2303.TW", "2382.TW", "3711.TW", "3034.TW", "3035.TW", 
-        "3231.TW", "2356.TW", "6669.TW", "2376.TW", "3017.TW", "2421.TW", "2412.TW"
+        "3231.TW", "2356.TW", "6669.TW", "2376.TW", "3017.TW", "2421.TW", "2412.TW",
+        "3481.TW", "2409.TW"
     ],
     "🚢 傳產/金融": [
         "2603.TW", "2609.TW", "2615.TW", "2618.TW", "2002.TW", "1605.TW", "1513.TW", "1519.TW",
@@ -56,22 +58,26 @@ SECTORS = {
 ALL_STOCKS = [item for sublist in SECTORS.values() for item in sublist]
 
 # ==========================================
-# 📰 新聞分析
+# 📰 新聞分析 (修正版)
 # ==========================================
 def get_news_score(ticker):
     name = STOCK_MAP.get(ticker, ticker.replace(".TW",""))
     encoded_name = urllib.parse.quote(name)
-    rss_url = f"https://news.google.com/rss/search?q={encoded_name}+when:5d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    # 修正 1: 只抓過去 2 天 (when:2d)，反應即時盤勢
+    rss_url = f"https://news.google.com/rss/search?q={encoded_name}+when:2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     try:
         feed = feedparser.parse(rss_url)
         if not feed.entries: return 0
-        pos = ["營收", "獲利", "新高", "大單", "買超", "調升", "漲停", "強勢", "填息", "完銷"]
-        neg = ["虧損", "衰退", "賣超", "調降", "重挫", "跌停", "利空", "斬倉", "貼息", "下修"]
+        
+        # 修正 2: 增加正面關鍵字，降低負面權重
+        pos = ["營收", "獲利", "新高", "大單", "買超", "調升", "漲停", "強勢", "填息", "完銷", "反彈", "回升", "大漲", "復甦"]
+        neg = ["虧損", "衰退", "賣超", "調降", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
+        
         score = 0
         for entry in feed.entries[:5]:
             t = entry.title
             for w in pos: score += 1
-            for w in neg: score -= 2
+            for w in neg: score -= 1 # 修正 3: 從扣 2 分改成扣 1 分，避免誤殺
         return score
     except: return 0
 
@@ -126,12 +132,11 @@ def calculate(ticker, df):
             y = close.tail(20).values
             try:
                 s, _ = np.polyfit(x, y, 1)
-                # 只要不是大跌趨勢，都給預測，方便觀察
                 if s > -0.5:
                     p5 = f"{curr + s*5:.1f}"
                     p10 = f"{curr + s*10:.1f}"
                     p20 = f"{curr + s*20:.1f}"
-                elif r_score >= 20: # 有一點點反彈跡象就給目標
+                elif r_score >= 20:
                     target = ema20 if ema20 > curr else curr*1.03
                     p5 = f"{target:.1f}"
             except: pass
@@ -161,7 +166,7 @@ def calculate(ticker, df):
 st.title("📡 AI 股市雷達 (全監控)")
 
 if st.button("🔄 掃描全市場", type="primary"):
-    with st.spinner('正在挖掘所有潛在機會...'):
+    with st.spinner('AI 正在讀取最新行情...'):
         raw = fetch_data(ALL_STOCKS)
         
         if raw is not None:
@@ -170,7 +175,7 @@ if st.button("🔄 掃描全市場", type="primary"):
                 r = calculate(t, raw[t])
                 if r: tech_res.append(r)
             
-            # 只對分數尚可的股票查新聞，省資源
+            # 只對分數尚可的股票查新聞
             candidates = [r for r in tech_res if r['技術分'] >= 40]
             
             news_map = {}
@@ -184,14 +189,13 @@ if st.button("🔄 掃描全市場", type="primary"):
             for r in tech_res:
                 n_score = news_map.get(r['id'], 0)
                 
-                signal = "⚪ 弱勢" # 預設
+                signal = "⚪ 弱勢"
                 buy_at = 0.0
                 is_etf = r['id'].startswith("00")
                 pass_threshold = 50 if is_etf else 60
-                watch_threshold = 40 # 觀察門檻
+                watch_threshold = 40
 
                 # --- 訊號分級 ---
-                # 1. 及格 (Buy)
                 if r['技術分'] >= pass_threshold:
                     if r['趨勢分'] > r['抄底分']:
                         signal = "🔴 偏多"
@@ -202,24 +206,25 @@ if st.button("🔄 掃描全市場", type="primary"):
                     
                     if r['技術分'] >= 80: signal = "🔥 強力"
                 
-                # 2. 蓄勢 (Watch) - 這是新加的！
                 elif r['技術分'] >= watch_threshold:
                     signal = "🟡 蓄勢"
-                    buy_at = 0 # 觀察中，暫不建議買
+                    buy_at = 0
 
                 if r['現價'] < buy_at: buy_at = r['現價']
 
-                # --- 新聞濾網 ---
+                # --- 新聞濾網 (修正版) ---
                 if signal != "⚪ 弱勢":
-                    if n_score <= -2:
+                    if n_score <= -3: # 門檻加嚴：要 -3 才會顯示有雷
                         if "甜蜜" in signal or "蓄勢" in signal:
-                             signal = "🩸 恐懼貪婪" # 越跌越爛越要看
+                             signal = "🩸 恐懼貪婪"
                              buy_at = r['現價']
                         else:
                              signal = "⚠️ 有雷"
                              buy_at = 0
+                             # 如果顯示有雷，目標價也隱藏，避免誤導
+                             r['5日'] = r['10日'] = r['20日'] = "-"
                     elif n_score >= 2:
-                         if "蓄勢" in signal: signal = "🔴 轉強(雙確認)" # 觀察股 + 好新聞 = 轉強
+                         if "蓄勢" in signal: signal = "🔴 轉強(雙確認)"
                          elif "強力" in signal or "偏多" in signal: signal += "(雙確認)"
 
                 r['💡AI判斷'] = signal
@@ -243,7 +248,7 @@ if st.button("🔄 掃描全市場", type="primary"):
                         if "偏多" in v: return 'background-color: #fff5e6; color: #d68910'
                         if "轉強" in v: return 'background-color: #fff5e6; color: #d68910'
                         if "甜蜜" in v: return 'background-color: #e6fffa; color: #006666'
-                        if "蓄勢" in v: return 'background-color: #ffffe0; color: #b7950b' # 黃色
+                        if "蓄勢" in v: return 'background-color: #ffffe0; color: #b7950b'
                         if "有雷" in v: return 'background-color: #ffe6e6; color: red; text-decoration: line-through'
                         return 'color: #cccccc'
 
