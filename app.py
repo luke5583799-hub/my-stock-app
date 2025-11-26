@@ -4,11 +4,12 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="AI 價值回歸預測系統", layout="wide", page_icon="⏳")
+st.set_page_config(page_title="AI 價值投資大師 (李永樂版)", layout="wide", page_icon="🏛️")
 
 # ==========================================
-# 📋 長線優質股名單
+# 📋 優質長線觀察清單 (去除投機股)
 # ==========================================
+# 這裡只留基本面較好的權值股與ETF，適合長線估值
 VALUE_STOCKS = [
     "2330.TW", "2317.TW", "2454.TW", "2308.TW", "2303.TW", "2382.TW", "3711.TW", "3034.TW", 
     "3008.TW", "2412.TW", "2881.TW", "2882.TW", "2891.TW", "5880.TW", "1216.TW", "1101.TW",
@@ -16,6 +17,7 @@ VALUE_STOCKS = [
     "NVDA", "AAPL", "MSFT", "GOOG", "TSLA", "BRK-B"
 ]
 
+# 股票中文對照
 STOCK_MAP = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "2382.TW": "廣達", "3711.TW": "日月光", "3034.TW": "聯詠",
@@ -27,66 +29,102 @@ STOCK_MAP = {
 }
 
 # ==========================================
-# 🧮 核心數學模型
+# 🧮 核心數學模型 (李永樂老師影片理論)
 # ==========================================
-def calculate_value_projection(ticker):
+
+def calculate_value_investing_metrics(ticker):
     try:
+        # 1. 獲取數據 (需要長一點的時間來計算勝率)
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="1y") # 抓一年數據算機率
+        hist = stock.history(period="1y")
         
         if len(hist) < 200: return None
         
         current_price = hist['Close'].iloc[-1]
         
-        # --- 1. 計算合理估值 (目標價) ---
-        info = stock.info
-        eps = info.get('trailingEps', 0)
+        # --- A. 估值模型 (Video 1: 判斷價格是否合理) ---
+        # 由於 DCF 需要複雜財報，我們使用「葛拉漢成長公式」或「本益比位階」做為簡化版估值
+        # 估值 V = EPS * (8.5 + 2g)  (g為預期成長率)
+        # 若無法取得 EPS (如 ETF)，則改用「統計學回歸」判斷便宜度
         
-        # 葛拉漢公式修正版 (個股) 或 年線回歸 (ETF)
-        if eps and not ticker.startswith("00") and "TW" in ticker: 
-            # 台股個股用葛拉漢 (給予保守成長率 3~5%)
-            fair_value = eps * (8.5 + 2 * 4) 
-        elif ticker.startswith("00") or not "TW" in ticker:
-            # ETF 或 美股(資料源問題) 用年線 (240MA) 作為價值中樞
-            fair_value = hist['Close'].rolling(240).mean().iloc[-1]
-        else:
-            fair_value = hist['Close'].rolling(120).mean().iloc[-1]
-
-        # 確保 fair_value 有數值
-        if pd.isna(fair_value): fair_value = current_price 
-
-        # 安全邊際 (便宜多少?)
-        margin = (fair_value - current_price) / fair_value
-
-        # --- 2. 計算回歸時間 (Time to Recovery) ---
-        # 計算每日漲跌幅
-        pct_change = hist['Close'].pct_change().dropna()
+        fair_value = 0
+        valuation_method = ""
+        safety_margin = 0 # 安全邊際
         
-        # 上漲日的平均漲幅 (Avg Gain on Up Days)
-        avg_up_move = pct_change[pct_change > 0].mean()
-        
-        # 勝率 (Win Rate)
-        win_rate = len(pct_change[pct_change > 0]) / len(pct_change)
-        
-        # 預估天數公式： 距離 / (股價 * 平均漲幅 * 勝率)
-        # 這是模擬「在正常波動下，平均每天能推進多少距離」
-        distance = fair_value - current_price
-        daily_velocity = current_price * avg_up_move * win_rate
-        
-        if distance > 0 and daily_velocity > 0:
-            days_to_target = int(distance / daily_velocity)
-        else:
-            days_to_target = 0 # 已達標或高估
+        try:
+            info = stock.info
+            eps = info.get('trailingEps', 0)
+            pe = info.get('trailingPE', 0)
+            
+            # 判斷是個股還是 ETF (ETF 通常沒 EPS)
+            if eps and pe and not ticker.startswith("00"): 
+                # 假設保守成長率 g = 5% (長線投資不假設暴漲)
+                # 葛拉漢公式修正版: V = EPS * (8.5 + 2 * 成長率)
+                growth_rate = 5 
+                fair_value = eps * (8.5 + 2 * growth_rate)
+                valuation_method = "葛拉漢估值法"
+            else:
+                # ETF 或無 EPS 個股：使用「年線乖離」作為價值錨點
+                # 假設年線 (240MA) 是市場公認的價值中樞
+                ma_240 = hist['Close'].rolling(240).mean().iloc[-1]
+                fair_value = ma_240
+                valuation_method = "年線價值法 (ETF)"
+                
+            # 計算安全邊際 (Margin of Safety)
+            # 安全邊際 = (合理價 - 現價) / 合理價
+            safety_margin = (fair_value - current_price) / fair_value
+            
+        except:
+            # 萬一都失敗，用半年均線當基準
+            ma_120 = hist['Close'].rolling(120).mean().iloc[-1]
+            fair_value = ma_120
+            valuation_method = "半年線基準"
+            safety_margin = (fair_value - current_price) / fair_value
 
-        # --- 3. 凱利公式倉位建議 ---
-        avg_loss = abs(pct_change[pct_change < 0].mean())
-        odds = avg_up_move / avg_loss if avg_loss > 0 else 1
-        kelly = (odds * win_rate - (1 - win_rate)) / odds
-        position = max(0, kelly * 0.5) # 半凱利
+        # --- B. 凱利公式 (Video 2: 資金分配) ---
+        # f = (bp - q) / b
+        # p = 勝率 (Win Rate)
+        # b = 賠率 (Odds) = 平均獲利 / 平均虧損
+        
+        # 計算過去一年的日漲跌
+        daily_returns = hist['Close'].pct_change().dropna()
+        
+        # 勝率 p: 上漲天數 / 總天數
+        winning_days = len(daily_returns[daily_returns > 0])
+        total_days = len(daily_returns)
+        p = winning_days / total_days
+        q = 1 - p
+        
+        # 賠率 b: 平均漲幅 / 平均跌幅 (取絕對值)
+        avg_win = daily_returns[daily_returns > 0].mean()
+        avg_loss = abs(daily_returns[daily_returns < 0].mean())
+        b = avg_win / avg_loss if avg_loss != 0 else 1
+        
+        # 凱利公式計算 (百分比)
+        kelly_fraction = (b * p - q) / b
+        
+        # 李永樂老師提醒：凱利公式太激進，實務上建議「半凱利」甚至更低
+        # 我們這裡設定更保守：如果估值太貴，倉位強制降低
+        suggested_position = kelly_fraction * 0.5 # 半凱利
+        
+        # 如果算出來是負的，代表期望值為負，不該下注
+        if suggested_position < 0: suggested_position = 0
+        
+        # 如果現價 > 合理價 (太貴)，強制減少倉位建議
+        if safety_margin < 0: suggested_position *= 0.2 
 
-        # 若太貴，倉位歸零
-        if margin < 0: position = 0
+        # --- C. 停損點 (Video 3: 避免賺小虧大) ---
+        # 使用 ATR (真實波幅) 計算理性停損，而非情緒停損
+        # 李永樂：跌 50% 要漲 100% 才能回本 -> 絕對不能讓虧損擴大
+        high = hist['High']
+        low = hist['Low']
+        close = hist['Close']
+        tr = np.maximum((high - low), np.maximum(abs(high - close.shift(1)), abs(low - close.shift(1))))
+        atr = tr.rolling(14).mean().iloc[-1]
+        
+        stop_loss_price = current_price - (2.5 * atr) # 2.5倍 ATR 為寬鬆停損，適合波段
 
+        # --- 顯示名稱 ---
         clean_code = ticker.replace(".TW", "")
         name = STOCK_MAP.get(ticker, "")
         display_name = f"{clean_code} {name}"
@@ -94,32 +132,36 @@ def calculate_value_projection(ticker):
         return {
             "代號": display_name,
             "現價": current_price,
-            "目標價": fair_value,
-            "潛在漲幅": margin * 100,
-            "預估天數": days_to_target,
-            "建議倉位": position * 100,
-            "勝率": win_rate * 100,
-            "_sort": margin # 用便宜程度排序
+            "合理估值": fair_value,
+            "安全邊際": safety_margin * 100, # 轉百分比
+            "估值法": valuation_method,
+            "勝率": p * 100,
+            "賠率": b,
+            "建議倉位": suggested_position * 100, # 轉百分比
+            "建議停損": stop_loss_price,
+            "趨勢": "📈" if current_price > fair_value else "📉"
         }
 
-    except: return None
+    except Exception as e:
+        return None
 
 # ==========================================
 # 🖥️ 介面
 # ==========================================
-st.title("⏳ AI 價值回歸預測系統")
+st.title("🏛️ AI 價值投資大師 (李永樂數學版)")
 st.markdown("""
-**李永樂數學模型應用：**
-* **目標價 (Target):** 根據公司獲利能力或長期均線算出的「應有價值」。
-* **預估天數 (Time):** 基於該股票的歷史波動慣性，推算漲回目標價需要的「平均交易日」。
+此系統基於 **李永樂老師** 的四大投資理論設計：
+1.  **貼現估值 (Value):** 算出股票的「真實價值」，只在便宜時買入。
+2.  **凱利公式 (Kelly):** 根據勝率與賠率，科學計算「該買多少倉位」。
+3.  **風險控制 (Stop Loss):** 避免「賺小虧大」，嚴格設定數學停損點。
 """)
 
-if st.button("🧮 計算回歸時間與獲利", type="primary"):
-    with st.spinner('AI 正在進行蒙特卡羅模擬與估值運算...'):
+if st.button("🧮 啟動價值運算", type="primary"):
+    with st.spinner('正在計算內在價值與凱利倉位...'):
         
         results = []
         with ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_ticker = {executor.submit(calculate_value_projection, t): t for t in VALUE_STOCKS}
+            future_to_ticker = {executor.submit(calculate_value_investing_metrics, t): t for t in VALUE_STOCKS}
             for future in future_to_ticker:
                 res = future.result()
                 if res: results.append(res)
@@ -127,47 +169,56 @@ if st.button("🧮 計算回歸時間與獲利", type="primary"):
         df = pd.DataFrame(results)
         
         if not df.empty:
-            # 邏輯：只顯示「被低估」的股票 (潛在漲幅 > 0)
-            df = df[df['潛在漲幅'] > 0]
-            df = df.sort_values(by='_sort', ascending=False)
+            # 依照「安全邊際」排序：越便宜的排越前面
+            df = df.sort_values(by='安全邊際', ascending=False)
             
-            # 樣式
-            def style_days(val):
-                if val > 250: return 'color: #b2bec3' # 超過一年，太久了
-                if val < 30: return 'color: #d63031; font-weight: bold' # 快要漲到了
-                return 'color: #0984e3'
+            # 樣式處理
+            def style_margin(val):
+                if val > 10: return 'background-color: #d4edda; color: #155724; font-weight: bold' # 綠色 (便宜)
+                if val < -10: return 'background-color: #f8d7da; color: #721c24' # 紅色 (太貴)
+                return ''
+            
+            def style_position(val):
+                if val > 30: return 'color: #d63031; font-weight: bold' # 重倉
+                if val == 0: return 'color: #b2bec3' # 空手
+                return 'color: #0984e3' # 輕倉
 
             st.dataframe(
-                df.style.applymap(style_days, subset=['預估天數'])
+                df.style.applymap(style_margin, subset=['安全邊際'])
+                      .applymap(style_position, subset=['建議倉位'])
                       .format({
                           "現價": "{:.1f}", 
-                          "目標價": "{:.1f}", 
-                          "潛在漲幅": "+{:.1f}%",
-                          "建議倉位": "{:.0f}%",
-                          "預估天數": "約 {:.0f} 天"
+                          "合理估值": "{:.1f}", 
+                          "安全邊際": "{:.1f}%",
+                          "勝率": "{:.1f}%", 
+                          "賠率": "{:.2f}", 
+                          "建議倉位": "{:.1f}%",
+                          "建議停損": "{:.1f}"
                       }),
                 use_container_width=True,
                 column_config={
                     "代號": st.column_config.TextColumn(width="small"),
-                    "目標價": st.column_config.NumberColumn(help="合理估值 (Fair Value)"),
-                    "潛在漲幅": st.column_config.TextColumn(help="目前距離目標價還有多少空間"),
-                    "預估天數": st.column_config.TextColumn(help="基於歷史動能推算的持有時間"),
-                    "建議倉位": st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100, help="凱利公式建議資金比例")
+                    "合理估值": st.column_config.NumberColumn(help="根據葛拉漢公式或年線計算的理論價值"),
+                    "安全邊際": st.column_config.NumberColumn(help="正數代表股價被低估(便宜)，負數代表高估(貴)"),
+                    "建議倉位": st.column_config.NumberColumn(help="根據凱利公式計算，建議投入總資金的比例"),
+                    "估值法": st.column_config.TextColumn(width="small")
                 }
             )
             
-            if len(df) > 0:
-                best = df.iloc[0]
-                st.success(f"""
-                ### 🎯 最佳價值機會：{best['代號']}
-                * **現在買入：** {best['現價']:.1f}
-                * **等待漲到：** **{best['目標價']:.1f}** (還有 +{best['潛在漲幅']})
-                * **預計持有：** **{best['預估天數']}** (交易日)
-                * **建議倉位：** 總資金的 {best['建議倉位']:.0f}%
-                """)
-                st.info("💡 註：預估天數僅供參考，代表依照該股票的「平均爬升速度」，理論上需要多久才能填補價值缺口。")
-            else:
-                st.warning("目前所有觀察名單的股價都高於合理估值（太貴了），建議空手觀望。")
+            # 顯示分析結論
+            top_pick = df.iloc[0]
+            st.success(f"""
+            ### 🏆 目前最具價值投資潛力：{top_pick['代號']}
+            * **現價：** {top_pick['現價']:.1f} vs **合理價：** {top_pick['合理估值']:.1f}
+            * **便宜程度：** {top_pick['安全邊際']:.1f}% (安全邊際)
+            * **凱利建議：** 如果你有一筆資金，數學上建議投入 **{top_pick['建議倉位']:.1f}%** 的部位。
+            """)
+            
+            st.warning("""
+            **⚠️ 關於凱利公式的提醒 (李永樂老師)：**
+            凱利公式計算的是「極限最佳解」，但現實中風險可能被低估。
+            **建議實際下單時，將「建議倉位」再除以 2 (半凱利)，以策安全。**
+            """)
             
         else:
             st.error("數據獲取失敗")
