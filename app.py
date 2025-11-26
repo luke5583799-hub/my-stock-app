@@ -113,10 +113,9 @@ def calculate(ticker, df):
         if 0 < rsi < 30: r_score += 40
         elif 0 < rsi < rsi_limit: r_score += 20
         
-        # 預測與賣出邏輯 (關鍵修改)
+        # 預測
         p5_val, p10_val = 0, 0
         p5, p10, p20 = "-", "-", "-"
-        
         if len(close) > 20:
             x = np.arange(len(close.tail(20)))
             y = close.tail(20).values
@@ -136,29 +135,17 @@ def calculate(ticker, df):
 
         stop_loss = curr - (2.5 * atr)
 
-        # --- 🔥 賣出訊號判斷 (Sell Logic) ---
-        sell_signal = "-" # 預設無訊號
-        
-        # 1. 停損偵測
-        # (這裡模擬：如果持有成本在現價之上，且現價跌破停損 -> 實際上無法得知你的成本，但可以提示風險)
-        # 我們假設用戶已經持有，判斷現在是否該逃
-        if curr < stop_loss:
-            sell_signal = "🛑 破線快逃"
-        
-        # 2. 過熱偵測
-        elif rsi > 75:
-            sell_signal = "⚠️ 過熱減碼"
-            
-        # 3. 獲利達標偵測
-        elif p5_val > 0 and curr >= p5_val:
-            sell_signal = "💰 達標(短)"
-        elif p10_val > 0 and curr >= p10_val:
-            sell_signal = "💰 達標(中)"
+        # --- 🔥 賣出訊號判斷 ---
+        sell_signal = "-"
+        if curr < stop_loss: sell_signal = "🛑 破線快逃"
+        elif rsi > 75: sell_signal = "⚠️ 過熱減碼"
+        elif p5_val > 0 and curr >= p5_val: sell_signal = "💰 達標(短)"
+        elif p10_val > 0 and curr >= p10_val: sell_signal = "💰 達標(中)"
 
         # 買進訊號
         signal = "⚪ 弱勢"
         buy_at = 0.0
-        pass_threshold = 50 if r['id'].startswith("00") else 60
+        pass_threshold = 50 if is_etf else 60
         watch_threshold = 40
 
         if t_score + r_score >= pass_threshold:
@@ -182,7 +169,7 @@ def calculate(ticker, df):
             "技術分": t_score + r_score,
             "🎯買點": round(buy_at, 1) if buy_at > 0 else "-",
             "💡AI判斷": signal,
-            "⚡賣出提示": sell_signal, # 新增這一欄
+            "⚡賣出提示": sell_signal,
             "5日": p5, "10日": p10, "20日": p20,
             "停損": round(stop_loss, 1),
             "_sort": t_score + r_score
@@ -205,82 +192,90 @@ if st.button("🚀 掃描買賣機會", type="primary"):
                 r = calculate(t, raw[t])
                 if r: tech_res.append(r)
             
-            # 新聞過濾
-            candidates = [r for r in tech_res if r['技術分'] >= 40]
-            news_map = {}
-            with ThreadPoolExecutor(max_workers=5) as ex:
-                future_map = {ex.submit(get_news_score, c['id']): c['id'] for c in candidates}
-                for f in future_map:
-                    try: news_map[future_map[f]] = f.result()
-                    except: news_map[future_map[f]] = 0
-            
-            final_data = []
-            for r in tech_res:
-                n_score = news_map.get(r['id'], 0)
-                signal = r['💡AI判斷']
-                buy_at = r['🎯買點']
+            # 如果技術分析完全沒結果 (例如網路問題)，顯示警告
+            if not tech_res:
+                st.warning("⚠️ 暫時無法取得技術數據，請稍後再試 (可能為 Yahoo API 連線問題)。")
+            else:
+                # 新聞過濾
+                candidates = [r for r in tech_res if r['技術分'] >= 40]
+                news_map = {}
+                with ThreadPoolExecutor(max_workers=5) as ex:
+                    future_map = {ex.submit(get_news_score, c['id']): c['id'] for c in candidates}
+                    for f in future_map:
+                        try: news_map[future_map[f]] = f.result()
+                        except: news_map[future_map[f]] = 0
+                
+                final_data = []
+                for r in tech_res:
+                    n_score = news_map.get(r['id'], 0)
+                    signal = r['💡AI判斷']
+                    buy_at = r['🎯買點']
 
-                if signal != "⚪ 弱勢":
-                    if n_score <= -4:
-                        if "甜蜜" in signal: signal = "🩸 恐懼貪婪" 
-                        else: 
-                            signal = "⚠️ 有雷"
-                            # 有雷時，建議不要買，但賣出提示依然有效(如果你手上有)
-                            buy_at = "-" 
-                    elif n_score >= 2:
-                         if "蓄勢" in signal: signal = "🔴 轉強(雙確認)"
-                         elif "強力" in signal or "偏多" in signal: signal += "(雙確認)"
+                    if signal != "⚪ 弱勢":
+                        if n_score <= -4:
+                            if "甜蜜" in signal: signal = "🩸 恐懼貪婪" 
+                            else: 
+                                signal = "⚠️ 有雷"
+                                buy_at = "-" 
+                        elif n_score >= 2:
+                             if "蓄勢" in signal: signal = "🔴 轉強(雙確認)"
+                             elif "強力" in signal or "偏多" in signal: signal += "(雙確認)"
 
-                r['💡AI判斷'] = signal
-                r['🎯買點'] = buy_at
-                r['_sort'] = r['技術分'] + abs(n_score * 5)
-                final_data.append(r)
+                    r['💡AI判斷'] = signal
+                    r['🎯買點'] = buy_at
+                    r['_sort'] = r['技術分'] + abs(n_score * 5)
+                    final_data.append(r)
 
-            df = pd.DataFrame(final_data)
-            df = df.sort_values(by='_sort', ascending=False)
+                # --- 關鍵修正：檢查 DataFrame 是否為空 ---
+                df = pd.DataFrame(final_data)
+                
+                if not df.empty:
+                    df = df.sort_values(by='_sort', ascending=False)
 
-            tab1, tab2, tab3, tab4 = st.tabs(["🚀 電子", "🚢 金融傳產", "📊 ETF", "🇺🇸 美股"])
-            
-            def show(s_list):
-                sub = df[df['id'].isin(s_list)].copy()
-                if not sub.empty:
-                    def style_buy(v):
-                        if "恐懼" in v: return 'background-color: #8b0000; color: white; font-weight: bold'
-                        if "強力" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
-                        if "雙確認" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
-                        if "偏多" in v: return 'background-color: #fff5e6; color: #d68910'
-                        if "甜蜜" in v: return 'background-color: #e6fffa; color: #006666'
-                        if "蓄勢" in v: return 'background-color: #ffffe0; color: #b7950b'
-                        if "有雷" in v: return 'background-color: #ffe6e6; color: red; text-decoration: line-through'
-                        return 'color: #cccccc'
+                    tab1, tab2, tab3, tab4 = st.tabs(["🚀 電子", "🚢 金融傳產", "📊 ETF", "🇺🇸 美股"])
                     
-                    def style_sell(v):
-                        if "破線" in v: return 'color: white; background-color: #ff0000; font-weight: bold' # 紅底白字，快逃
-                        if "達標" in v: return 'color: #009900; font-weight: bold' # 綠字，賺錢
-                        if "過熱" in v: return 'color: #ff9900; font-weight: bold' # 橘字，小心
-                        return 'color: #cccccc'
+                    def show(s_list):
+                        sub = df[df['id'].isin(s_list)].copy()
+                        if not sub.empty:
+                            def style_buy(v):
+                                if "恐懼" in v: return 'background-color: #8b0000; color: white; font-weight: bold'
+                                if "強力" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
+                                if "雙確認" in v: return 'background-color: #ffcccc; color: #8b0000; font-weight: bold'
+                                if "偏多" in v: return 'background-color: #fff5e6; color: #d68910'
+                                if "甜蜜" in v: return 'background-color: #e6fffa; color: #006666'
+                                if "蓄勢" in v: return 'background-color: #ffffe0; color: #b7950b'
+                                if "有雷" in v: return 'background-color: #ffe6e6; color: red; text-decoration: line-through'
+                                return 'color: #cccccc'
+                            
+                            def style_sell(v):
+                                if "破線" in v: return 'color: white; background-color: #ff0000; font-weight: bold'
+                                if "達標" in v: return 'color: #009900; font-weight: bold'
+                                if "過熱" in v: return 'color: #ff9900; font-weight: bold'
+                                return 'color: #cccccc'
 
-                    st.dataframe(
-                        sub.drop(columns=['id', '技術分', '_sort']),
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "代號": st.column_config.TextColumn(width="small"),
-                            "現價": st.column_config.NumberColumn(format="%.1f", width="small"),
-                            "🎯買點": st.column_config.TextColumn(width="small"),
-                            "💡AI判斷": st.column_config.TextColumn(width="medium"),
-                            "⚡賣出提示": st.column_config.TextColumn(width="small", help="若持有該股，請參考此欄位操作"),
-                            "5日": st.column_config.TextColumn(width="small"),
-                            "10日": st.column_config.TextColumn(width="small"),
-                            "20日": st.column_config.TextColumn(width="small"),
-                            "停損": st.column_config.NumberColumn(format="%.1f", width="small")
-                        }
-                    )
-                else: st.info("無數據")
+                            st.dataframe(
+                                sub.drop(columns=['id', '技術分', '_sort']),
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "代號": st.column_config.TextColumn(width="small"),
+                                    "現價": st.column_config.NumberColumn(format="%.1f", width="small"),
+                                    "🎯買點": st.column_config.TextColumn(width="small"),
+                                    "💡AI判斷": st.column_config.TextColumn(width="large"),
+                                    "⚡賣出提示": st.column_config.TextColumn(width="small", help="若持有該股，請參考此欄位操作"),
+                                    "5日": st.column_config.TextColumn(width="small"),
+                                    "10日": st.column_config.TextColumn(width="small"),
+                                    "20日": st.column_config.TextColumn(width="small"),
+                                    "停損": st.column_config.NumberColumn(format="%.1f", width="small")
+                                }
+                            )
+                        else: st.info("無數據")
 
-            with tab1: show(SECTORS["🚀 電子/AI"])
-            with tab2: show(SECTORS["🚢 傳產/金融"])
-            with tab3: show(SECTORS["📊 ETF"])
-            with tab4: show(SECTORS["🇺🇸 美股"])
+                    with tab1: show(SECTORS["🚀 電子/AI"])
+                    with tab2: show(SECTORS["🚢 傳產/金融"])
+                    with tab3: show(SECTORS["📊 ETF"])
+                    with tab4: show(SECTORS["🇺🇸 美股"])
+                else:
+                    st.warning("⚠️ 掃描完成，但所有股票皆不符合顯示條件，或數據異常。")
 
-        else: st.error("連線失敗")
+        else: st.error("連線失敗 (Yahoo Finance 無回應)")
