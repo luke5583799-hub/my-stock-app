@@ -36,13 +36,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 📋 股票清單
+# 📋 股票清單 (已加入 6414 樺漢)
 # ==========================================
 SECTORS = {
     "🚀 電子權值": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2303.TW", "3711.TW", "3008.TW", "3045.TW"],
     "🤖 AI 供應鏈": [
         "3231.TW", "2356.TW", "6669.TW", "2382.TW", "2376.TW", "3017.TW", "2421.TW", "3035.TW", "3443.TW",
-        "3317.TW" 
+        "3317.TW", "6414.TW" # 新增：樺漢
     ],
     "👁️ 光電與顯示": [
         "3481.TW", "2409.TW", "3034.TW", "4961.TW", "3545.TW", 
@@ -61,7 +61,7 @@ NAME_MAP = {
     "2330.TW": "台積電", "2454.TW": "聯發科", "3711.TW": "日月光", "3661.TW": "世芯-KY", "3443.TW": "創意",
     "2317.TW": "鴻海", "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
     "2376.TW": "技嘉", "3017.TW": "奇鋐", "2421.TW": "建準", "3324.TW": "雙鴻", "3035.TW": "智原",
-    "3317.TW": "尼克森", "6668.TW": "中揚光",
+    "3317.TW": "尼克森", "6668.TW": "中揚光", "6414.TW": "樺漢", # 新增
     "1513.TW": "中興電", "1519.TW": "華城", "1503.TW": "士電", "1504.TW": "東元", "1609.TW": "大亞", "1605.TW": "華新", "6806.TW": "森崴", "9958.TW": "世紀鋼",
     "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航", "2610.TW": "華航",
     "2002.TW": "中鋼", "1101.TW": "台泥", "1301.TW": "台塑", "1303.TW": "南亞", 
@@ -137,7 +137,7 @@ class QuantAnalyzer:
         self.df['EMA20'] = EMAIndicator(self.close, window=20).ema_indicator()
         self.df['EMA60'] = EMAIndicator(self.close, window=60).ema_indicator()
         
-        # 新增：年線 (240MA) 用於估值
+        # 年線 (240MA) 用於估值
         self.df['SMA240'] = SMAIndicator(self.close, window=240).sma_indicator()
         
         macd = MACD(self.close)
@@ -358,10 +358,8 @@ def main():
                     column_config={
                         "id": st.column_config.TextColumn("名稱", width="small"),
                         "price": st.column_config.NumberColumn("現價", format="%.1f", width="small"),
-                        # 新增欄位
                         "fair_value": st.column_config.NumberColumn("💰 合理價", format="%.1f", help="年線(240MA)均值回歸價值"),
                         "upside": st.column_config.NumberColumn("📈 空間%", format="%.1f%%", help="正數=低估(有肉) / 負數=高估(太貴)"),
-                        
                         "signal": st.column_config.TextColumn("AI 判斷", width="medium"),
                         "buy": st.column_config.NumberColumn("🎯 買點", format="%.1f"),
                         "stop": st.column_config.NumberColumn("🛑 停損", format="%.1f"),
