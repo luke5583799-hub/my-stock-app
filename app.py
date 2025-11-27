@@ -137,8 +137,6 @@ class QuantAnalyzer:
         self.df['EMA20'] = EMAIndicator(self.close, window=20).ema_indicator()
         self.df['EMA60'] = EMAIndicator(self.close, window=60).ema_indicator()
         
-        self.df['SMA240'] = SMAIndicator(self.close, window=240).sma_indicator()
-        
         macd = MACD(self.close)
         self.df['MACD'] = macd.macd().fillna(0)
         self.df['Signal'] = macd.macd_signal().fillna(0)
@@ -150,6 +148,9 @@ class QuantAnalyzer:
         self.df['BB_Low'] = bb.bollinger_lband().fillna(self.close)
         
         self.df['ATR'] = AverageTrueRange(self.high, self.low, self.close).average_true_range().fillna(0)
+        
+        # 年線
+        self.df['SMA240'] = SMAIndicator(self.close, window=240).sma_indicator()
 
     def get_valuation(self):
         curr = self.close.iloc[-1]
@@ -194,7 +195,7 @@ def generate_strategy(ticker, df, news_score):
     curr_price = analyzer.close.iloc[-1]
     t_score, r_score = analyzer.get_scores()
     mfi_val = analyzer.df['MFI'].iloc[-1]
-    rsi_val = analyzer.df['RSI'].iloc[-1] # 取得 RSI 數值
+    rsi_val = analyzer.df['RSI'].iloc[-1] 
     
     fair_val, upside = analyzer.get_valuation()
     
@@ -238,7 +239,7 @@ def generate_strategy(ticker, df, news_score):
             "buy": buy_price,
             "stop": stop_loss,
             "target": target_1,
-            "rsi": rsi_val, # 傳送 RSI 到前端
+            "rsi": rsi_val,
             "score": max(total_score, r_score),
             "mfi": mfi_val,
             "sell_note": sell_note
@@ -324,21 +325,20 @@ def main():
                     return 'color: white'
 
                 st.dataframe(
-                    # 移除 kelly, mfi, ticker_code 等欄位，加入 rsi
+                    # ⚠️ 修正點：這裡拿掉 'kelly'，確保不會報錯
                     df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi', 'kelly']),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
                         "id": st.column_config.TextColumn("名稱", width="small"),
                         "price": st.column_config.NumberColumn("現價", format="%.1f", width="small"),
-                        "fair_value": st.column_config.NumberColumn("💰 合理價", format="%.1f", help="年線(240MA)均值回歸價值"),
-                        "upside": st.column_config.NumberColumn("📈 空間%", format="%.1f%%", help="正數=低估(有肉) / 負數=高估(太貴)"),
+                        "fair_value": st.column_config.NumberColumn("💰 合理價", format="%.1f", help="年線(240MA)"),
+                        "upside": st.column_config.NumberColumn("📈 空間%", format="%.1f%%"),
                         "signal": st.column_config.TextColumn("AI 判斷", width="medium"),
                         "buy": st.column_config.NumberColumn("🎯 買點", format="%.1f"),
                         "stop": st.column_config.NumberColumn("🛑 停損", format="%.1f"),
                         "target": st.column_config.NumberColumn("🚀 目標", format="%.1f"),
-                        # 新增 RSI 欄位顯示
-                        "rsi": st.column_config.NumberColumn("RSI", format="%.1f", help=">70 過熱, <30 超賣"),
+                        "rsi": st.column_config.NumberColumn("RSI", format="%.1f", help=">70過熱, <30超賣"),
                     }
                 )
 
