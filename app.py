@@ -18,7 +18,7 @@ from ta.volatility import BollingerBands, AverageTrueRange
 # ==========================================
 # ⚙️ 系統配置
 # ==========================================
-st.set_page_config(page_title="HedgeFund OS | 修正版", layout="wide", page_icon="🏛️")
+st.set_page_config(page_title="HedgeFund OS | 價值整合版", layout="wide", page_icon="⚖️")
 
 st.markdown("""
 <style>
@@ -36,18 +36,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 📋 股票清單 (修正 6668 為中揚光，並歸類至光電)
+# 📋 股票清單
 # ==========================================
 SECTORS = {
     "🚀 電子權值": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2303.TW", "3711.TW", "3008.TW", "3045.TW"],
     "🤖 AI 供應鏈": [
         "3231.TW", "2356.TW", "6669.TW", "2382.TW", "2376.TW", "3017.TW", "2421.TW", "3035.TW", "3443.TW",
-        "3317.TW" # 尼克森
+        "3317.TW" 
     ],
-    "👁️ 光電與顯示": [ # 擴充此分類包含光學
+    "👁️ 光電與顯示": [
         "3481.TW", "2409.TW", "3034.TW", "4961.TW", "3545.TW", 
-        "8016.TW", # 矽創
-        "6668.TW"  # 中揚光 (修正歸類)
+        "8016.TW", "6668.TW" 
     ],
     "⚡ 重電與綠能": ["1513.TW", "1519.TW", "1503.TW", "1504.TW", "1609.TW", "1605.TW", "6806.TW", "9958.TW"],
     "🚢 航運與傳產": [
@@ -62,8 +61,7 @@ NAME_MAP = {
     "2330.TW": "台積電", "2454.TW": "聯發科", "3711.TW": "日月光", "3661.TW": "世芯-KY", "3443.TW": "創意",
     "2317.TW": "鴻海", "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
     "2376.TW": "技嘉", "3017.TW": "奇鋐", "2421.TW": "建準", "3324.TW": "雙鴻", "3035.TW": "智原",
-    "3317.TW": "尼克森",
-    "6668.TW": "中揚光", # 修正名稱
+    "3317.TW": "尼克森", "6668.TW": "中揚光",
     "1513.TW": "中興電", "1519.TW": "華城", "1503.TW": "士電", "1504.TW": "東元", "1609.TW": "大亞", "1605.TW": "華新", "6806.TW": "森崴", "9958.TW": "世紀鋼",
     "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航", "2610.TW": "華航",
     "2002.TW": "中鋼", "1101.TW": "台泥", "1301.TW": "台塑", "1303.TW": "南亞", 
@@ -89,6 +87,7 @@ class DataService:
     @st.cache_data(ttl=600)
     def get_batch_data(tickers):
         try:
+            # 抓 2 年數據以計算年線 (240MA)
             data = yf.download(" ".join(tickers), period="2y", group_by='ticker', progress=False)
             return data
         except: return None
@@ -101,15 +100,15 @@ class DataService:
         try:
             feed = feedparser.parse(rss)
             if not feed.entries: return 0, []
-            pos_keys = ["營收", "獲利", "新高", "大單", "買超", "漲停", "強勢", "填息", "完銷", "反彈"]
-            neg_keys = ["虧損", "衰退", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
+            pos = ["營收", "獲利", "新高", "大單", "買超", "漲停", "強勢", "填息", "完銷", "反彈"]
+            neg = ["虧損", "衰退", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
             score = 0
             headlines = []
             for entry in feed.entries[:3]:
                 t = entry.title
                 headlines.append({"title": t, "link": entry.link})
-                for w in pos_keys: score += 1
-                for w in neg_keys: score -= 1
+                for w in pos: score += 1
+                for w in neg: score -= 1
             return score, headlines
         except: return 0, []
 
@@ -138,10 +137,12 @@ class QuantAnalyzer:
         self.df['EMA20'] = EMAIndicator(self.close, window=20).ema_indicator()
         self.df['EMA60'] = EMAIndicator(self.close, window=60).ema_indicator()
         
+        # 新增：年線 (240MA) 用於估值
+        self.df['SMA240'] = SMAIndicator(self.close, window=240).sma_indicator()
+        
         macd = MACD(self.close)
         self.df['MACD'] = macd.macd().fillna(0)
         self.df['Signal'] = macd.macd_signal().fillna(0)
-        
         self.df['RSI'] = RSIIndicator(self.close).rsi().fillna(50)
         self.df['MFI'] = MFIIndicator(self.high, self.low, self.close, self.volume, window=14).money_flow_index().fillna(50)
         
@@ -150,6 +151,22 @@ class QuantAnalyzer:
         self.df['BB_Low'] = bb.bollinger_lband().fillna(self.close)
         
         self.df['ATR'] = AverageTrueRange(self.high, self.low, self.close).average_true_range().fillna(0)
+
+    def get_valuation(self):
+        """計算合理價與潛在空間"""
+        curr = self.close.iloc[-1]
+        # 使用年線作為價值中樞 (Mean Reversion)
+        fair_value = self.df['SMA240'].iloc[-1]
+        
+        # 如果上市不滿一年沒年線，改用半年線
+        if pd.isna(fair_value):
+            fair_value = self.close.rolling(120).mean().iloc[-1]
+        if pd.isna(fair_value):
+            fair_value = curr # 新股無法估值
+
+        # 潛在空間 (Upside)
+        upside = (fair_value - curr) / curr * 100
+        return fair_value, upside
 
     def get_scores(self):
         t_score = 0
@@ -160,18 +177,18 @@ class QuantAnalyzer:
             ema60 = self.df['EMA60'].iloc[-1]
             mfi = self.df['MFI'].iloc[-1]
             
+            # 趨勢分
             if curr > ema20 > ema60: t_score += 30
             elif curr > ema60: t_score += 15
             
             if self.df['MACD'].iloc[-1] > self.df['Signal'].iloc[-1]: t_score += 15
             rsi = self.df['RSI'].iloc[-1]
             if 50 <= rsi <= 75: t_score += 15
-            
             if mfi > 60: t_score += 20
             
+            # 抄底分
             if rsi < 30: r_score += 40
             elif rsi < 40: r_score += 20
-            
             if curr <= self.df['BB_Low'].iloc[-1]: r_score += 30
             if mfi < 20: r_score += 10 
             
@@ -202,6 +219,9 @@ def generate_strategy(ticker, df, news_score):
     curr_price = analyzer.close.iloc[-1]
     t_score, r_score = analyzer.get_scores()
     mfi_val = analyzer.df['MFI'].iloc[-1]
+    
+    # 獲取估值數據
+    fair_val, upside = analyzer.get_valuation()
     
     total_score = t_score + (news_score * 3)
     
@@ -238,6 +258,8 @@ def generate_strategy(ticker, df, news_score):
             "id": analyzer.display_name,
             "ticker_code": ticker,
             "price": curr_price,
+            "fair_value": fair_val, # 合理價
+            "upside": upside,       # 空間
             "signal": signal,
             "buy": buy_price,
             "stop": stop_loss,
@@ -255,55 +277,24 @@ def generate_strategy(ticker, df, news_score):
 # ==========================================
 def draw_chart(analyzer):
     df = analyzer.df.tail(150)
-    
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.05, row_heights=[0.7, 0.3])
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['BB_High'],
-        line=dict(width=0),
-        showlegend=False
-    ), row=1, col=1)
+    # 布林通道與K線
+    fig.add_trace(go.Scatter(x=df.index, y=df['BB_High'], line=dict(width=0), showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 255, 255, 0.05)', name='布林通道'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], line=dict(color='#00FFFF', width=1.5, dash='dot'), name='地板'), row=1, col=1)
+    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
     
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['BB_Low'],
-        line=dict(width=0),
-        fill='tonexty',
-        fillcolor='rgba(0, 255, 255, 0.05)',
-        name='布林通道'
-    ), row=1, col=1)
-
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['BB_Low'],
-        line=dict(color='#00FFFF', width=1.5, dash='dot'),
-        name='地板 (布林下軌)'
-    ), row=1, col=1)
-
-    fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-        name='K線'
-    ), row=1, col=1)
-    
-    if 'EMA20' in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#FFD700', width=1), name='月線'), row=1, col=1)
-    if 'EMA60' in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df['EMA60'], line=dict(color='#00BFFF', width=1), name='季線'), row=1, col=1)
+    # 均線 (含年線)
+    if 'EMA20' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#FFD700', width=1), name='月線'), row=1, col=1)
+    if 'EMA60' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['EMA60'], line=dict(color='#00BFFF', width=1), name='季線'), row=1, col=1)
+    if 'SMA240' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['SMA240'], line=dict(color='#FFFFFF', width=1.5, dash='dash'), name='年線 (合理價)'), row=1, col=1)
     
     colors = ['#ef5350' if o - c >= 0 else '#26a69a' for o, c in zip(df['Open'], df['Close'])]
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
     
     fig.update_xaxes(tickformat="%Y/%m")
-
-    fig.update_layout(
-        title=f"<b>{analyzer.display_name}</b> 技術分析",
-        yaxis_title='價格',
-        xaxis_rangeslider_visible=False,
-        height=600,
-        template="plotly_dark",
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", y=1.02, x=0, xanchor="left")
-    )
+    fig.update_layout(title=f"<b>{analyzer.display_name}</b> 技術分析 (含年線)", yaxis_title='價格', xaxis_rangeslider_visible=False, height=600, template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.02, x=0, xanchor="left"))
     return fig
 
 # ==========================================
@@ -354,6 +345,12 @@ def main():
             
             with col_left:
                 st.subheader("📋 交易決策總表")
+                
+                def style_upside(v):
+                    if v > 10: return 'color: #00FF00; font-weight: bold' # 還有10%以上空間 -> 綠色
+                    if v < -10: return 'color: #FF5252' # 太貴了 -> 紅色
+                    return 'color: white'
+
                 st.dataframe(
                     df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi']),
                     use_container_width=True,
@@ -361,10 +358,14 @@ def main():
                     column_config={
                         "id": st.column_config.TextColumn("名稱", width="small"),
                         "price": st.column_config.NumberColumn("現價", format="%.1f", width="small"),
+                        # 新增欄位
+                        "fair_value": st.column_config.NumberColumn("💰 合理價", format="%.1f", help="年線(240MA)均值回歸價值"),
+                        "upside": st.column_config.NumberColumn("📈 空間%", format="%.1f%%", help="正數=低估(有肉) / 負數=高估(太貴)"),
+                        
                         "signal": st.column_config.TextColumn("AI 判斷", width="medium"),
                         "buy": st.column_config.NumberColumn("🎯 買點", format="%.1f"),
                         "stop": st.column_config.NumberColumn("🛑 停損", format="%.1f"),
-                        "target": st.column_config.NumberColumn("💰 目標", format="%.1f"),
+                        "target": st.column_config.NumberColumn("🚀 目標", format="%.1f"),
                         "kelly": st.column_config.ProgressColumn("倉位", format="%.0f%%", min_value=0, max_value=1),
                     }
                 )
@@ -379,7 +380,8 @@ def main():
                 <div class="info-card">
                     <h3>{info['id']}</h3>
                     <p><b>🔥 訊號：</b> {info['signal']}</p>
-                    <p><b>🌊 MFI 資金流：</b> {info['mfi']:.1f} <span style='color:gray;font-size:0.8em'>(>60資金進駐)</span></p>
+                    <p><b>💰 合理估值：</b> {info['fair_value']:.1f}</p>
+                    <p><b>📈 潛在空間：</b> <span style="color:{'green' if info['upside']>0 else 'red'}">{info['upside']:.1f}%</span></p>
                     <p><b>🏦 建議倉位：</b> {info['kelly']*100:.0f}%</p>
                     <hr>
                     <p><b>🎯 建議買點：</b> <span class="highlight">{info['buy']:.1f}</span></p>
