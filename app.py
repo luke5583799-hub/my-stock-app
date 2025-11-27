@@ -18,7 +18,7 @@ from ta.volatility import BollingerBands, AverageTrueRange
 # ==========================================
 # ⚙️ 系統配置
 # ==========================================
-st.set_page_config(page_title="HedgeFund OS | RSI 增強版", layout="wide", page_icon="⚖️")
+st.set_page_config(page_title="HedgeFund OS | 穩定修復版", layout="wide", page_icon="⚖️")
 
 st.markdown("""
 <style>
@@ -100,15 +100,15 @@ class DataService:
         try:
             feed = feedparser.parse(rss)
             if not feed.entries: return 0, []
-            pos = ["營收", "獲利", "新高", "大單", "買超", "漲停", "強勢", "填息", "完銷", "反彈"]
-            neg = ["虧損", "衰退", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
+            pos_keys = ["營收", "獲利", "新高", "大單", "買超", "漲停", "強勢", "填息", "完銷", "反彈"]
+            neg_keys = ["虧損", "衰退", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
             score = 0
             headlines = []
             for entry in feed.entries[:3]:
                 t = entry.title
                 headlines.append({"title": t, "link": entry.link})
-                for w in pos: score += 1
-                for w in neg: score -= 1
+                for w in pos_keys: score += 1
+                for w in neg_keys: score -= 1
             return score, headlines
         except: return 0, []
 
@@ -137,6 +137,9 @@ class QuantAnalyzer:
         self.df['EMA20'] = EMAIndicator(self.close, window=20).ema_indicator()
         self.df['EMA60'] = EMAIndicator(self.close, window=60).ema_indicator()
         
+        # 年線
+        self.df['SMA240'] = SMAIndicator(self.close, window=240).sma_indicator()
+        
         macd = MACD(self.close)
         self.df['MACD'] = macd.macd().fillna(0)
         self.df['Signal'] = macd.macd_signal().fillna(0)
@@ -148,9 +151,6 @@ class QuantAnalyzer:
         self.df['BB_Low'] = bb.bollinger_lband().fillna(self.close)
         
         self.df['ATR'] = AverageTrueRange(self.high, self.low, self.close).average_true_range().fillna(0)
-        
-        # 年線
-        self.df['SMA240'] = SMAIndicator(self.close, window=240).sma_indicator()
 
     def get_valuation(self):
         curr = self.close.iloc[-1]
@@ -186,6 +186,22 @@ class QuantAnalyzer:
             
         except: pass
         return t_score, r_score
+
+    def calculate_kelly(self):
+        try:
+            window = self.df.tail(120)
+            daily_ret = window['Close'].pct_change().dropna()
+            wins = daily_ret[daily_ret > 0]
+            losses = daily_ret[daily_ret < 0]
+            if len(wins) == 0: return 0
+            win_rate = len(wins) / len(daily_ret)
+            avg_win = wins.mean()
+            avg_loss = abs(losses.mean()) if len(losses) > 0 else 0.01
+            odds = avg_win / avg_loss
+            kelly = (odds * win_rate - (1 - win_rate)) / odds
+            if kelly <= 0: return 0.1 if win_rate > 0.45 else 0
+            else: return min(kelly * 0.5, 0.5)
+        except: return 0
 
 # ==========================================
 # 📝 策略層
@@ -227,6 +243,9 @@ def generate_strategy(ticker, df, news_score):
     sell_note = ""
     if stop_loss > 0 and curr_price < stop_loss: sell_note = "🛑 破線快逃"
     elif rsi_val > 75: sell_note = "⚠️ 過熱減碼"
+    
+    # 確保 Kelly 有被計算，但稍後在表格中可以不顯示
+    kelly = analyzer.calculate_kelly()
 
     return {
         "info": {
@@ -242,6 +261,7 @@ def generate_strategy(ticker, df, news_score):
             "rsi": rsi_val,
             "score": max(total_score, r_score),
             "mfi": mfi_val,
+            "kelly": kelly, # 保留數據供右側卡片使用
             "sell_note": sell_note
         },
         "analyzer": analyzer
@@ -325,15 +345,15 @@ def main():
                     return 'color: white'
 
                 st.dataframe(
-                    # ⚠️ 修正點：這裡拿掉 'kelly'，確保不會報錯
+                    # ⚠️ 這裡把 kelly, mfi, ticker_code 隱藏，但它們還在 info 裡
                     df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi', 'kelly']),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
                         "id": st.column_config.TextColumn("名稱", width="small"),
                         "price": st.column_config.NumberColumn("現價", format="%.1f", width="small"),
-                        "fair_value": st.column_config.NumberColumn("💰 合理價", format="%.1f", help="年線(240MA)"),
-                        "upside": st.column_config.NumberColumn("📈 空間%", format="%.1f%%"),
+                        "fair_value": st.column_config.NumberColumn("💰 合理價", format="%.1f", help="年線(240MA)均值回歸價值"),
+                        "upside": st.column_config.NumberColumn("📈 空間%", format="%.1f%%", help="正數=低估(有肉) / 負數=高估(太貴)"),
                         "signal": st.column_config.TextColumn("AI 判斷", width="medium"),
                         "buy": st.column_config.NumberColumn("🎯 買點", format="%.1f"),
                         "stop": st.column_config.NumberColumn("🛑 停損", format="%.1f"),
