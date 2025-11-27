@@ -18,7 +18,7 @@ from ta.volatility import BollingerBands, AverageTrueRange
 # ==========================================
 # ⚙️ 系統配置
 # ==========================================
-st.set_page_config(page_title="HedgeFund OS | 價值整合版", layout="wide", page_icon="⚖️")
+st.set_page_config(page_title="HedgeFund OS | RSI 增強版", layout="wide", page_icon="⚖️")
 
 st.markdown("""
 <style>
@@ -36,14 +36,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 📋 股票清單 (已加入 6962 AMAX-KY)
+# 📋 股票清單
 # ==========================================
 SECTORS = {
     "🚀 電子權值": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2303.TW", "3711.TW", "3008.TW", "3045.TW"],
     "🤖 AI 供應鏈": [
         "3231.TW", "2356.TW", "6669.TW", "2382.TW", "2376.TW", "3017.TW", "2421.TW", "3035.TW", "3443.TW",
         "3317.TW", "6414.TW",
-        "6962.TW" # 新增：AMAX-KY
+        "6962.TW"
     ],
     "👁️ 光電與顯示": [
         "3481.TW", "2409.TW", "3034.TW", "4961.TW", "3545.TW", 
@@ -62,8 +62,7 @@ NAME_MAP = {
     "2330.TW": "台積電", "2454.TW": "聯發科", "3711.TW": "日月光", "3661.TW": "世芯-KY", "3443.TW": "創意",
     "2317.TW": "鴻海", "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
     "2376.TW": "技嘉", "3017.TW": "奇鋐", "2421.TW": "建準", "3324.TW": "雙鴻", "3035.TW": "智原",
-    "3317.TW": "尼克森", "6668.TW": "中揚光", "6414.TW": "樺漢", 
-    "6962.TW": "AMAX", # 新增
+    "3317.TW": "尼克森", "6668.TW": "中揚光", "6414.TW": "樺漢", "6962.TW": "AMAX",
     "1513.TW": "中興電", "1519.TW": "華城", "1503.TW": "士電", "1504.TW": "東元", "1609.TW": "大亞", "1605.TW": "華新", "6806.TW": "森崴", "9958.TW": "世紀鋼",
     "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航", "2610.TW": "華航",
     "2002.TW": "中鋼", "1101.TW": "台泥", "1301.TW": "台塑", "1303.TW": "南亞", 
@@ -89,7 +88,6 @@ class DataService:
     @st.cache_data(ttl=600)
     def get_batch_data(tickers):
         try:
-            # 抓 2 年數據以計算年線 (240MA)
             data = yf.download(" ".join(tickers), period="2y", group_by='ticker', progress=False)
             return data
         except: return None
@@ -139,7 +137,6 @@ class QuantAnalyzer:
         self.df['EMA20'] = EMAIndicator(self.close, window=20).ema_indicator()
         self.df['EMA60'] = EMAIndicator(self.close, window=60).ema_indicator()
         
-        # 年線 (240MA) 用於估值
         self.df['SMA240'] = SMAIndicator(self.close, window=240).sma_indicator()
         
         macd = MACD(self.close)
@@ -155,18 +152,12 @@ class QuantAnalyzer:
         self.df['ATR'] = AverageTrueRange(self.high, self.low, self.close).average_true_range().fillna(0)
 
     def get_valuation(self):
-        """計算合理價與潛在空間"""
         curr = self.close.iloc[-1]
-        # 使用年線作為價值中樞 (Mean Reversion)
         fair_value = self.df['SMA240'].iloc[-1]
-        
-        # 如果上市不滿一年沒年線，改用半年線
         if pd.isna(fair_value):
             fair_value = self.close.rolling(120).mean().iloc[-1]
         if pd.isna(fair_value):
-            fair_value = curr # 新股無法估值
-
-        # 潛在空間 (Upside)
+            fair_value = curr 
         upside = (fair_value - curr) / curr * 100
         return fair_value, upside
 
@@ -179,7 +170,6 @@ class QuantAnalyzer:
             ema60 = self.df['EMA60'].iloc[-1]
             mfi = self.df['MFI'].iloc[-1]
             
-            # 趨勢分
             if curr > ema20 > ema60: t_score += 30
             elif curr > ema60: t_score += 15
             
@@ -188,7 +178,6 @@ class QuantAnalyzer:
             if 50 <= rsi <= 75: t_score += 15
             if mfi > 60: t_score += 20
             
-            # 抄底分
             if rsi < 30: r_score += 40
             elif rsi < 40: r_score += 20
             if curr <= self.df['BB_Low'].iloc[-1]: r_score += 30
@@ -196,22 +185,6 @@ class QuantAnalyzer:
             
         except: pass
         return t_score, r_score
-
-    def calculate_kelly(self):
-        try:
-            window = self.df.tail(120)
-            daily_ret = window['Close'].pct_change().dropna()
-            wins = daily_ret[daily_ret > 0]
-            losses = daily_ret[daily_ret < 0]
-            if len(wins) == 0: return 0
-            win_rate = len(wins) / len(daily_ret)
-            avg_win = wins.mean()
-            avg_loss = abs(losses.mean()) if len(losses) > 0 else 0.01
-            odds = avg_win / avg_loss
-            kelly = (odds * win_rate - (1 - win_rate)) / odds
-            if kelly <= 0: return 0.1 if win_rate > 0.45 else 0
-            else: return min(kelly * 0.5, 0.5)
-        except: return 0
 
 # ==========================================
 # 📝 策略層
@@ -221,8 +194,8 @@ def generate_strategy(ticker, df, news_score):
     curr_price = analyzer.close.iloc[-1]
     t_score, r_score = analyzer.get_scores()
     mfi_val = analyzer.df['MFI'].iloc[-1]
+    rsi_val = analyzer.df['RSI'].iloc[-1] # 取得 RSI 數值
     
-    # 獲取估值數據
     fair_val, upside = analyzer.get_valuation()
     
     total_score = t_score + (news_score * 3)
@@ -249,24 +222,23 @@ def generate_strategy(ticker, df, news_score):
     atr = analyzer.df['ATR'].iloc[-1]
     stop_loss = curr_price - (2.5 * atr) if buy_price > 0 else 0
     target_1 = curr_price + (3 * atr)
-    kelly = analyzer.calculate_kelly()
     
     sell_note = ""
     if stop_loss > 0 and curr_price < stop_loss: sell_note = "🛑 破線快逃"
-    elif analyzer.df['RSI'].iloc[-1] > 75: sell_note = "⚠️ 過熱減碼"
+    elif rsi_val > 75: sell_note = "⚠️ 過熱減碼"
 
     return {
         "info": {
             "id": analyzer.display_name,
             "ticker_code": ticker,
             "price": curr_price,
-            "fair_value": fair_val, # 合理價
-            "upside": upside,       # 空間
+            "fair_value": fair_val,
+            "upside": upside,
             "signal": signal,
             "buy": buy_price,
             "stop": stop_loss,
             "target": target_1,
-            "kelly": kelly,
+            "rsi": rsi_val, # 傳送 RSI 到前端
             "score": max(total_score, r_score),
             "mfi": mfi_val,
             "sell_note": sell_note
@@ -281,13 +253,11 @@ def draw_chart(analyzer):
     df = analyzer.df.tail(150)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
-    # 布林通道與K線
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_High'], line=dict(width=0), showlegend=False), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 255, 255, 0.05)', name='布林通道'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], line=dict(color='#00FFFF', width=1.5, dash='dot'), name='地板'), row=1, col=1)
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
     
-    # 均線 (含年線)
     if 'EMA20' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#FFD700', width=1), name='月線'), row=1, col=1)
     if 'EMA60' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['EMA60'], line=dict(color='#00BFFF', width=1), name='季線'), row=1, col=1)
     if 'SMA240' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['SMA240'], line=dict(color='#FFFFFF', width=1.5, dash='dash'), name='年線 (合理價)'), row=1, col=1)
@@ -349,12 +319,13 @@ def main():
                 st.subheader("📋 交易決策總表")
                 
                 def style_upside(v):
-                    if v > 10: return 'color: #00FF00; font-weight: bold' # 還有10%以上空間 -> 綠色
-                    if v < -10: return 'color: #FF5252' # 太貴了 -> 紅色
+                    if v > 10: return 'color: #00FF00; font-weight: bold'
+                    if v < -10: return 'color: #FF5252'
                     return 'color: white'
 
                 st.dataframe(
-                    df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi']),
+                    # 移除 kelly, mfi, ticker_code 等欄位，加入 rsi
+                    df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi', 'kelly']),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -366,7 +337,8 @@ def main():
                         "buy": st.column_config.NumberColumn("🎯 買點", format="%.1f"),
                         "stop": st.column_config.NumberColumn("🛑 停損", format="%.1f"),
                         "target": st.column_config.NumberColumn("🚀 目標", format="%.1f"),
-                        "kelly": st.column_config.ProgressColumn("倉位", format="%.0f%%", min_value=0, max_value=1),
+                        # 新增 RSI 欄位顯示
+                        "rsi": st.column_config.NumberColumn("RSI", format="%.1f", help=">70 過熱, <30 超賣"),
                     }
                 )
 
@@ -382,7 +354,7 @@ def main():
                     <p><b>🔥 訊號：</b> {info['signal']}</p>
                     <p><b>💰 合理估值：</b> {info['fair_value']:.1f}</p>
                     <p><b>📈 潛在空間：</b> <span style="color:{'green' if info['upside']>0 else 'red'}">{info['upside']:.1f}%</span></p>
-                    <p><b>🏦 建議倉位：</b> {info['kelly']*100:.0f}%</p>
+                    <p><b>🌊 RSI 指標：</b> {info['rsi']:.1f}</p>
                     <hr>
                     <p><b>🎯 建議買點：</b> <span class="highlight">{info['buy']:.1f}</span></p>
                     <p><b>🛑 停損防守：</b> {info['stop']:.1f}</p>
