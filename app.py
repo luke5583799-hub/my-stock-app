@@ -14,7 +14,7 @@ from ta.trend import MACD, EMAIndicator, SMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
-st.set_page_config(page_title="AI 長線暴利獵人", layout="wide", page_icon="🦄")
+st.set_page_config(page_title="AI 長線暴利獵人 (v6.0)", layout="wide", page_icon="🦄")
 
 st.markdown("""
 <style>
@@ -31,7 +31,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 📋 成長股清單 (移除慢牛，只留賽車)
+# 📋 成長股清單
 # ==========================================
 SECTORS = {
     "🦄 AI 核心與伺服器": ["2330.TW", "2317.TW", "2454.TW", "2382.TW", "3231.TW", "6669.TW", "2356.TW", "2376.TW", "3017.TW", "2421.TW", "3443.TW", "3661.TW", "6962.TW"],
@@ -109,7 +109,7 @@ class GrowthAnalyzer:
             slope, intercept = np.polyfit(x, y, 1)
             
             curr_price = self.close.iloc[-1]
-            projected_price = curr_price + (slope * 252 * 0.8) # 預測一年後，打8折保守估計
+            projected_price = curr_price + (slope * 252 * 0.8)
             
             potential_return = ((projected_price - curr_price) / curr_price) * 100
             return potential_return, projected_price
