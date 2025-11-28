@@ -33,7 +33,6 @@ st.markdown("""
 # ==========================================
 # 📋 成長股清單 (移除慢牛，只留賽車)
 # ==========================================
-# 為了追求 50% 報酬，我們只選高波動、高成長潛力的板塊
 SECTORS = {
     "🦄 AI 核心與伺服器": ["2330.TW", "2317.TW", "2454.TW", "2382.TW", "3231.TW", "6669.TW", "2356.TW", "2376.TW", "3017.TW", "2421.TW", "3443.TW", "3661.TW", "6962.TW"],
     "⚡ 重電與能源飆股": ["1513.TW", "1519.TW", "1503.TW", "1504.TW", "1609.TW", "6806.TW", "9958.TW"],
@@ -51,8 +50,6 @@ NAME_MAP = {
     "AMZN": "亞馬遜", "META": "臉書", "AMD": "超微", "PLTR": "帕蘭泰爾", "SMCI": "美超微", "COIN": "Coinbase", "ARM": "安謀", "MSTR": "微策略"
 }
 
-ALL_TICKERS = [t for s in SECTORS.values() for t in s]
-
 # ==========================================
 # 🧱 數據層
 # ==========================================
@@ -61,7 +58,6 @@ class DataService:
     @st.cache_data(ttl=600)
     def get_batch_data(tickers):
         try:
-            # 抓 2 年數據，計算長期趨勢
             return yf.download(" ".join(tickers), period="2y", group_by='ticker', progress=False)
         except: return None
 
@@ -73,16 +69,15 @@ class DataService:
         try:
             feed = feedparser.parse(rss)
             if not feed.entries: return 0, []
-            # 針對長線投資，我們看的是「成長關鍵字」
-            pos = ["營收創新高", "獲利翻倍", "擴廠", "訂單爆滿", "調升目標", "殖利率", "成長", "轉虧為盈"]
-            neg = ["衰退", "砍單", "下修", "利空", "違約", "假帳", "掏空", "調查"]
+            pos = ["營收創新高", "獲利翻倍", "擴廠", "訂單爆滿", "調升目標", "殖利率", "成長", "轉虧為盈", "大漲", "強勢"]
+            neg = ["衰退", "砍單", "下修", "利空", "違約", "假帳", "掏空", "調查", "重挫"]
             score = 0
             headlines = []
             for entry in feed.entries[:3]:
                 t = entry.title
                 headlines.append({"title": t, "link": entry.link})
-                for w in pos: score += 2 # 好消息加權
-                for w in neg: score -= 3 # 壞消息扣重分
+                for w in pos: score += 2
+                for w in neg: score -= 3
             return score, headlines
         except: return 0, []
 
@@ -96,42 +91,27 @@ class GrowthAnalyzer:
         self.close = self.df['Close']
         self.name = NAME_MAP.get(ticker, ticker)
         
-        # 填充數據
         self.df.fillna(method='bfill', inplace=True)
         self.df.fillna(method='ffill', inplace=True)
         
-        # 計算長線指標
         self.ema60 = EMAIndicator(self.close, window=60).ema_indicator()
-        self.sma240 = SMAIndicator(self.close, window=240).sma_indicator() # 年線
+        self.sma240 = SMAIndicator(self.close, window=240).sma_indicator()
         self.rsi = RSIIndicator(self.close, window=14).rsi()
         self.atr = AverageTrueRange(self.df['High'], self.df['Low'], self.close).average_true_range()
 
     def calculate_yearly_potential(self):
-        """
-        計算年化預期報酬率 (Yearly Potential Return)
-        邏輯：利用過去半年的趨勢斜率，推算如果趨勢延續，一年後會在哪裡。
-        """
         try:
-            # 取最近半年 (120天) 的數據來算趨勢
             recent_data = self.close.tail(120)
             if len(recent_data) < 60: return 0, 0
             
             x = np.arange(len(recent_data))
             y = recent_data.values
-            
-            # 線性回歸算出斜率 (每天漲多少錢)
             slope, intercept = np.polyfit(x, y, 1)
             
             curr_price = self.close.iloc[-1]
+            projected_price = curr_price + (slope * 252 * 0.8) # 預測一年後，打8折保守估計
             
-            # 預測一年後 (252個交易日)
-            # 公式：現價 + (日斜率 * 252)
-            # 為了保守，我們打個 8 折 (0.8)
-            projected_price = curr_price + (slope * 252 * 0.8)
-            
-            # 計算潛在報酬率 %
             potential_return = ((projected_price - curr_price) / curr_price) * 100
-            
             return potential_return, projected_price
         except: return 0, 0
 
@@ -141,25 +121,17 @@ class GrowthAnalyzer:
         ma240 = self.sma240.iloc[-1]
         rsi = self.rsi.iloc[-1]
         
-        # 1. 趨勢濾網：必須站上年線 (長多格局)
-        if curr < ma240:
-            return "❄️ 空頭 (勿碰)", 0
+        if curr < ma240: return "❄️ 空頭 (勿碰)", 0
             
-        # 2. 動能濾網：站上季線 (中期強勢)
         strength = 0
         if curr > ma60: strength += 1
-        if ma60 > ma240: strength += 1 # 均線多頭排列
+        if ma60 > ma240: strength += 1
         
-        # 3. 回檔機會 (Buy the Dip)
-        # 如果是強勢股 (多頭排列)，但 RSI 回檔到 50 附近，是絕佳買點
         is_dip = False
-        if strength >= 2 and 40 <= rsi <= 60:
-            is_dip = True
+        if strength >= 2 and 40 <= rsi <= 60: is_dip = True
             
-        # 4. 新聞濾網
         if news_score <= -3: return "⚠️ 基本面有雷", 0
         
-        # 5. 綜合判斷
         if is_dip: return "💎 黃金回檔 (最佳)", 90
         if strength >= 2: return "🔥 強勢持有", 80
         if strength == 1: return "🟡 盤整/蓄勢", 60
@@ -173,12 +145,6 @@ def main():
     with st.sidebar:
         st.header("🦄 長線暴利獵人")
         selected_sector = st.radio("選擇賽道", list(SECTORS.keys()))
-        st.info("""
-        **本系統專為「年賺 50%」設計：**
-        1. 排除慢牛股，只選高爆發力賽道。
-        2. 使用線性回歸推算年化報酬潛力。
-        3. 尋找「強勢股的回檔」作為最佳買點。
-        """)
 
     st.title(f"🚀 {selected_sector} - 長線潛力評估")
 
@@ -199,25 +165,20 @@ def main():
                 else: df = raw_data.copy()
                 
                 analyzer = GrowthAnalyzer(ticker, df)
-                
-                # 計算潛力
                 potential_pct, target_price = analyzer.calculate_yearly_potential()
                 
-                # 只有潛力 > 0 的才去查新聞 (節省資源)
                 news_score = 0
-                if potential_pct > 20: 
+                if potential_pct > 10: 
                     news_score, _ = DataService.get_news_sentiment(ticker)
                 
                 signal, score = analyzer.get_long_term_signal(news_score)
                 
-                # 買點建議：長線通常掛在季線 (60MA) 或 月線 (20MA)
                 ma20 = df['Close'].rolling(20).mean().iloc[-1]
                 ma60 = df['Close'].rolling(60).mean().iloc[-1]
                 
                 buy_zone = ma20
-                if "回檔" in signal: buy_zone = ma60 # 回檔深一點接更香
+                if "回檔" in signal: buy_zone = ma60
                 
-                # 停損：長線設寬一點 (15%)
                 stop_loss = analyzer.close.iloc[-1] * 0.85
 
                 results.append({
@@ -229,7 +190,7 @@ def main():
                     "signal": signal,
                     "buy_at": buy_zone,
                     "stop": stop_loss,
-                    "score": score + (potential_pct * 0.5), # 潛力越高分數越高
+                    "score": score + (potential_pct * 0.5),
                     "analyzer": analyzer
                 })
             except: pass
@@ -239,7 +200,6 @@ def main():
 
         if results:
             df_res = pd.DataFrame(results)
-            # 依照「潛在漲幅」排序，這才是你想看的
             df_res = df_res.sort_values(by='potential', ascending=False)
             
             col1, col2 = st.columns([2, 1])
@@ -248,9 +208,9 @@ def main():
                 st.subheader("🏆 年度潛力排行榜")
                 
                 def style_potential(v):
-                    if v > 50: return 'color: #00FF00; font-weight: bold; background-color: #1b5e20' # >50% 亮綠
-                    if v > 20: return 'color: #2ecc71; font-weight: bold' # >20% 淺綠
-                    if v < 0: return 'color: #ff5252' # 負成長
+                    if v > 50: return 'color: #00FF00; font-weight: bold; background-color: #1b5e20'
+                    if v > 20: return 'color: #2ecc71; font-weight: bold'
+                    if v < 0: return 'color: #ff5252'
                     return ''
 
                 st.dataframe(
@@ -274,7 +234,6 @@ def main():
                 sel_ticker = selected_name.split("(")[1].replace(")", "")
                 sel_item = next(item for item in results if item['ticker'] == sel_ticker)
                 
-                # 顯示卡片
                 st.markdown(f"""
                 <div class="info-card">
                     <h3 style="color:#d63384">{sel_item['name']}</h3>
@@ -286,18 +245,17 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # 畫圖 (長線看週線級別的趨勢)
                 analyzer = sel_item['analyzer']
-                df_chart = analyzer.df.tail(250) # 看一年
+                df_chart = analyzer.df.tail(250)
                 
                 fig = go.Figure()
                 fig.add_trace(go.Candlestick(x=df_chart.index,
                                 open=df_chart['Open'], high=df_chart['High'],
                                 low=df_chart['Low'], close=df_chart['Close'], name='日K'))
                 fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'].rolling(60).mean(), 
-                                line=dict(color='orange', width=2), name='季線 (生命線)'))
+                                line=dict(color='orange', width=2), name='季線'))
                 fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'].rolling(240).mean(), 
-                                line=dict(color='blue', width=2), name='年線 (多空分界)'))
+                                line=dict(color='blue', width=2), name='年線'))
                 
                 fig.update_layout(height=400, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
