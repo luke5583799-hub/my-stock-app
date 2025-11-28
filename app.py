@@ -49,21 +49,19 @@ SECTORS = {
 NAME_MAP = {
     "2330.TW": "台積電", "2454.TW": "聯發科", "3711.TW": "日月光", "3661.TW": "世芯-KY", "3443.TW": "創意",
     "2317.TW": "鴻海", "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
-    "2376.TW": "技嘉", "3017.TW": "奇鋐", "2421.TW": "建準", "3324.TW": "雙鴻", "3035.TW": "智原",
-    "3317.TW": "尼克森", "6668.TW": "中揚光", "6414.TW": "樺漢", "6962.TW": "AMAX",
-    "1513.TW": "中興電", "1519.TW": "華城", "1503.TW": "士電", "1504.TW": "東元", "1609.TW": "大亞", "1605.TW": "華新", "6806.TW": "森崴", "9958.TW": "世紀鋼",
+    "2376.TW": "技嘉", "3017.TW": "奇鋐", "2421.TW": "建準", "6962.TW": "AMAX",
+    "1513.TW": "中興電", "1519.TW": "華城", "1503.TW": "士電", "1504.TW": "東元", "1609.TW": "大亞", "6806.TW": "森崴", "9958.TW": "世紀鋼",
+    "3008.TW": "大立光", "3406.TW": "玉晶光", "3529.TW": "力旺", "3035.TW": "智原", "6531.TW": "愛普", "3227.TW": "原相", "8069.TW": "元太",
+    "3481.TW": "群創", "2409.TW": "友達", "3034.TW": "聯詠", "4961.TW": "天鈺", "3545.TW": "敦泰", "8016.TW": "矽創", "6668.TW": "中揚光", "3673.TW": "宸鴻",
+    "3317.TW": "尼克森", "6414.TW": "樺漢",
     "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航", "2610.TW": "華航",
     "2002.TW": "中鋼", "1101.TW": "台泥", "1301.TW": "台塑", "1303.TW": "南亞", 
     "2881.TW": "富邦金", "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "5880.TW": "合庫金",
     "2884.TW": "玉山金", "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金",
-    "3008.TW": "大立光", "3045.TW": "台灣大", "3034.TW": "聯詠", "3481.TW": "群創", "2409.TW": "友達",
-    "4961.TW": "天鈺", "3545.TW": "敦泰", "8016.TW": "矽創", "3673.TW": "宸鴻",
-    "2303.TW": "聯電", "2308.TW": "台達電",
     "0050.TW": "台灣50", "0056.TW": "高股息", "00878.TW": "國泰永續", "00929.TW": "復華科技", "00919.TW": "群益精選",
     "00940.TW": "元大價值", "006208.TW": "富邦台50", "00980A.TW": "野村趨勢", "00981A.TW": "統一動力", "00982A.TW": "群益強棒",
     "NVDA": "輝達", "TSLA": "特斯拉", "AAPL": "蘋果", "MSFT": "微軟", "GOOG": "谷歌",
-    "AMZN": "亞馬遜", "META": "臉書", "AMD": "超微", "INTC": "英特爾", "PLTR": "帕蘭泰爾",
-    "SMCI": "美超微", "COIN": "Coinbase"
+    "AMZN": "亞馬遜", "META": "臉書", "AMD": "超微", "PLTR": "帕蘭泰爾", "SMCI": "美超微", "COIN": "Coinbase", "ARM": "安謀", "MSTR": "微策略", "INTC": "英特爾"
 }
 
 ALL_TICKERS = [t for s in SECTORS.values() for t in s]
@@ -83,181 +81,155 @@ class DataService:
     def get_news_sentiment(ticker):
         name = NAME_MAP.get(ticker, ticker.replace(".TW", ""))
         encoded = urllib.parse.quote(name)
-        rss = f"https://news.google.com/rss/search?q={encoded}+when:2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        rss = f"https://news.google.com/rss/search?q={encoded}+when:7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
         try:
             feed = feedparser.parse(rss)
             if not feed.entries: return 0, []
-            pos = ["營收", "獲利", "新高", "大單", "買超", "漲停", "強勢", "填息", "完銷", "反彈", "大漲"]
-            neg = ["虧損", "衰退", "重挫", "跌停", "利空", "斬倉", "貼息", "下修", "破底"]
+            pos = ["營收創新高", "獲利翻倍", "擴廠", "訂單爆滿", "調升目標", "殖利率", "成長", "轉虧為盈", "大漲", "強勢"]
+            neg = ["衰退", "砍單", "下修", "利空", "違約", "假帳", "掏空", "調查", "重挫"]
             score = 0
             headlines = []
             for entry in feed.entries[:3]:
                 t = entry.title
                 headlines.append({"title": t, "link": entry.link})
-                for w in pos: score += 1
-                for w in neg: score -= 1 # 扣分權重降低，避免過度恐慌
+                for w in pos: score += 2
+                for w in neg: score -= 3
             return score, headlines
         except: return 0, []
 
 # ==========================================
-# 🧠 分析層
+# 🧠 核心分析
 # ==========================================
-class QuantAnalyzer:
+class Analyzer:
     def __init__(self, ticker, df):
         self.ticker = ticker
         self.df = df.dropna(how='all').copy()
         self.close = self.df['Close']
-        self.high = self.df['High']
-        self.low = self.df['Low']
-        self.volume = self.df['Volume']
+        self.name = NAME_MAP.get(ticker, ticker)
         
-        cn_name = NAME_MAP.get(ticker, "")
-        clean_ticker = ticker.replace(".TW", "")
-        self.display_name = f"{clean_ticker} {cn_name}"
-        
-        self._add_indicators()
-        
-    def _add_indicators(self):
         self.df.fillna(method='bfill', inplace=True)
         self.df.fillna(method='ffill', inplace=True)
-
-        self.df['EMA20'] = EMAIndicator(self.close, window=20).ema_indicator()
-        self.df['EMA60'] = EMAIndicator(self.close, window=60).ema_indicator()
-        self.df['SMA240'] = SMAIndicator(self.close, window=240).sma_indicator()
         
-        macd = MACD(self.close)
-        self.df['MACD'] = macd.macd().fillna(0)
-        self.df['Signal'] = macd.macd_signal().fillna(0)
-        self.df['RSI'] = RSIIndicator(self.close).rsi().fillna(50)
-        self.df['MFI'] = MFIIndicator(self.high, self.low, self.close, self.volume, window=14).money_flow_index().fillna(50)
+        self.ema60 = EMAIndicator(self.close, window=60).ema_indicator()
+        self.sma240 = SMAIndicator(self.close, window=240).sma_indicator()
+        self.rsi = RSIIndicator(self.close, window=14).rsi()
+        self.atr = AverageTrueRange(self.df['High'], self.df['Low'], self.close).average_true_range()
+        self.bb = BollingerBands(self.close, window=20, window_dev=2)
         
-        bb = BollingerBands(self.close, window=20, window_dev=2)
-        self.df['BB_High'] = bb.bollinger_hband().fillna(self.close)
-        self.df['BB_Low'] = bb.bollinger_lband().fillna(self.close)
-        
-        self.df['ATR'] = AverageTrueRange(self.high, self.low, self.close).average_true_range().fillna(0)
+        # MFI (資金流)
+        self.mfi = MFIIndicator(self.df['High'], self.df['Low'], self.close, self.df['Volume'], window=14).money_flow_index()
 
     def calculate_potential(self):
-        """計算年化潛力 (v6.0 核心)"""
         try:
-            recent_data = self.close.tail(120)
-            if len(recent_data) < 60: return 0
-            x = np.arange(len(recent_data))
-            y = recent_data.values
-            slope, intercept = np.polyfit(x, y, 1)
+            recent = self.close.tail(120)
+            if len(recent) < 60: return 0
+            x = np.arange(len(recent))
+            y = recent.values
+            s, _ = np.polyfit(x, y, 1)
             curr = self.close.iloc[-1]
-            projected = curr + (slope * 252 * 0.8) # 預估一年後
-            potential = ((projected - curr) / curr) * 100
-            return potential
+            proj = curr + (s * 252 * 0.8)
+            return ((proj - curr) / curr) * 100
         except: return 0
 
-    def get_scores(self):
-        t_score = 0
-        r_score = 0
+    def calculate_fair_value(self):
+        # 合理價 = 年線
+        val = self.sma240.iloc[-1]
+        return val if not pd.isna(val) else self.close.iloc[-1]
+
+    def calculate_kelly(self):
+        # 凱利公式
         try:
-            curr = self.close.iloc[-1]
-            ema20 = self.df['EMA20'].iloc[-1]
-            ema60 = self.df['EMA60'].iloc[-1]
-            mfi = self.df['MFI'].iloc[-1]
-            rsi = self.df['RSI'].iloc[-1]
-            
-            # 趨勢分
-            if curr > ema20 > ema60: t_score += 30
-            elif curr > ema60: t_score += 15
-            
-            # 動能分
-            if self.df['MACD'].iloc[-1] > self.df['Signal'].iloc[-1]: t_score += 15
-            if 50 <= rsi <= 75: t_score += 15
-            if mfi > 60: t_score += 20
-            
-            # 抄底分
-            if rsi < 30: r_score += 40
-            elif rsi < 40: r_score += 20
-            if curr <= self.df['BB_Low'].iloc[-1]: r_score += 30
-            if mfi < 20: r_score += 10 
-            
-        except: pass
-        return t_score, r_score
+            ret = self.close.pct_change().dropna().tail(120)
+            wins = ret[ret > 0]
+            losses = ret[ret < 0]
+            if len(wins) == 0: return 0
+            win_rate = len(wins) / len(ret)
+            avg_win = wins.mean()
+            avg_loss = abs(losses.mean())
+            odds = avg_win / avg_loss if avg_loss > 0 else 1
+            kelly = (odds * win_rate - (1 - win_rate)) / odds
+            return max(0, min(kelly * 0.5, 0.5))
+        except: return 0
+
+    def get_signal(self, news_score):
+        curr = self.close.iloc[-1]
+        ma60 = self.ema60.iloc[-1]
+        ma240 = self.sma240.iloc[-1]
+        rsi = self.rsi.iloc[-1]
+        
+        if curr < ma240: return "❄️ 空頭"
+        
+        strength = 0
+        if curr > ma60: strength += 1
+        if ma60 > ma240: strength += 1
+        
+        if news_score <= -3: return "⚠️ 有雷"
+        
+        if strength >= 2 and 40 <= rsi <= 60: return "💎 黃金回檔"
+        if strength >= 2: return "🔥 強勢持有"
+        if strength == 1: return "🟡 盤整"
+        return "⚪ 觀察"
 
 # ==========================================
-# 📝 策略層
+# 📝 策略生成
 # ==========================================
 def generate_strategy(ticker, df, news_score):
-    analyzer = QuantAnalyzer(ticker, df)
-    curr_price = analyzer.close.iloc[-1]
-    t_score, r_score = analyzer.get_scores()
-    potential = analyzer.calculate_potential() # 新增：年化潛力
+    az = Analyzer(ticker, df)
+    curr = az.close.iloc[-1]
     
-    total_score = t_score + (news_score * 3)
+    pot = az.calculate_potential()
+    fair = az.calculate_fair_value()
+    signal = az.get_signal(news_score)
+    kelly = az.calculate_kelly()
     
-    # 訊號判定
-    signal = "⚪ 觀望"
-    buy_price = analyzer.df['BB_Low'].iloc[-1] 
-    ma5 = analyzer.close.rolling(5).mean().iloc[-1]
+    # 買點：支撐位 (年線 或 季線 或 布林下軌)
+    buy = az.sma240.iloc[-1]
+    if "回檔" in signal or "強勢" in signal:
+        buy = az.ema60.iloc[-1]
     
-    if total_score >= 80:
-        signal = "🔥 強力買進"
-        buy_price = curr_price
-    elif total_score >= 60:
-        signal = "🔴 偏多操作"
-        buy_price = ma5 if curr_price > ma5 else curr_price
-    elif r_score >= 40:
-        signal = "💎 甜蜜抄底"
-        buy_price = analyzer.df['BB_Low'].iloc[-1]
+    # 布林下軌作為最後防線
+    bb_low = az.bb.bollinger_lband().iloc[-1]
+    if pd.isna(buy): buy = bb_low
     
-    if news_score <= -3:
-        signal = "⚠️ 風險警示"
-        buy_price = 0 
+    stop = curr * 0.85
+    target = curr * 1.5 if pot > 50 else curr * 1.2
     
-    atr = analyzer.df['ATR'].iloc[-1]
-    stop_loss = curr_price - (2.5 * atr) if buy_price > 0 else 0
-    target_1 = curr_price + (3 * atr)
-    
-    sell_note = ""
-    if stop_loss > 0 and curr_price < stop_loss: sell_note = "🛑 破線快逃"
-    elif analyzer.df['RSI'].iloc[-1] > 75: sell_note = "⚠️ 過熱減碼"
+    upside = (fair - curr) / curr * 100
 
     return {
         "info": {
-            "id": analyzer.display_name,
+            "id": az.name,
             "ticker_code": ticker,
-            "price": curr_price,
-            "potential": potential, # 顯示潛在漲幅
+            "price": curr,
+            "potential": pot,
+            "fair_value": fair,
+            "upside": upside,
             "signal": signal,
-            "buy": buy_price,
-            "stop": stop_loss,
-            "target": target_1,
-            "rsi": analyzer.df['RSI'].iloc[-1],
-            "score": max(total_score, r_score),
-            "sell_note": sell_note
+            "buy": buy,
+            "stop": stop,
+            "target": target,
+            "kelly": kelly,
+            "rsi": az.rsi.iloc[-1],
+            "mfi": az.mfi.iloc[-1]
         },
-        "analyzer": analyzer
+        "analyzer": az
     }
 
 # ==========================================
-# 🎨 視覺層
+# 🎨 畫圖
 # ==========================================
-def draw_chart(analyzer):
-    df = analyzer.df.tail(150)
+def draw_chart(az):
+    df = az.df.tail(250)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-
-    # 布林通道 (河流)
-    fig.add_trace(go.Scatter(x=df.index, y=df['BB_High'], line=dict(width=0), showlegend=False), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 255, 255, 0.05)', name='布林通道'), row=1, col=1)
     
-    # K線
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA60'], line=dict(color='orange'), name='季線'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['SMA240'], line=dict(color='blue'), name='年線'), row=1, col=1)
     
-    # 均線
-    if 'EMA20' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#FFD700', width=1), name='月線'), row=1, col=1)
-    if 'EMA60' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['EMA60'], line=dict(color='#00BFFF', width=1), name='季線'), row=1, col=1)
-    if 'SMA240' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['SMA240'], line=dict(color='#FFFFFF', width=1.5, dash='dash'), name='年線'), row=1, col=1)
-    
-    colors = ['#ef5350' if o - c >= 0 else '#26a69a' for o, c in zip(df['Open'], df['Close'])]
+    colors = ['red' if o - c >= 0 else 'green' for o, c in zip(df['Open'], df['Close'])]
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
     
-    fig.update_xaxes(tickformat="%Y/%m")
-    fig.update_layout(title=f"<b>{analyzer.display_name}</b> 技術分析 (含年線)", yaxis_title='價格', xaxis_rangeslider_visible=False, height=600, template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.02, x=0, xanchor="left"))
+    fig.update_layout(height=500, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
     return fig
 
 # ==========================================
@@ -265,108 +237,100 @@ def draw_chart(analyzer):
 # ==========================================
 def main():
     with st.sidebar:
-        st.header("🎛️ HedgeFund OS")
-        selected_sector = st.radio("選擇板塊", list(SECTORS.keys()))
+        st.header("💎 HedgeFund OS | 合體版")
+        selected_sector = st.radio("選擇賽道", list(SECTORS.keys()))
 
-    st.title(f"🏛️ {selected_sector} - 戰情室")
+    st.title(f"🚀 {selected_sector} - 戰情室")
 
-    with st.spinner(f'正在下載 {selected_sector} 數據...'):
+    with st.spinner('AI 正在進行價值與動能運算...'):
         tickers = SECTORS[selected_sector]
         raw_data = DataService.get_batch_data(tickers)
         
         if raw_data is None:
-            st.error("數據連線失敗")
+            st.error("連線失敗")
             return
 
-        strategies = []
-        progress_bar = st.progress(0)
+        results = []
+        progress = st.progress(0)
         
         for i, ticker in enumerate(tickers):
             try:
-                if isinstance(raw_data.columns, pd.MultiIndex): df_stock = raw_data[ticker].copy()
-                else: df_stock = raw_data.copy()
+                if isinstance(raw_data.columns, pd.MultiIndex): df = raw_data[ticker].copy()
+                else: df = raw_data.copy()
                 
-                analyzer = QuantAnalyzer(ticker, df_stock)
-                tech_score, _ = analyzer.get_scores()
+                # 初步篩選：潛力 > 10% 才查新聞
+                az_temp = Analyzer(ticker, df)
+                pot = az_temp.calculate_potential()
                 
-                news_score = 0
-                if tech_score >= 40:
-                    news_score, _ = DataService.get_news_sentiment(ticker)
+                n_score = 0
+                if pot > 10: 
+                    n_score, _ = DataService.get_news_sentiment(ticker)
                 
-                result = generate_strategy(ticker, df_stock, news_score)
-                strategies.append(result)
+                res = generate_strategy(ticker, df, n_score)
+                results.append(res)
             except: pass
-            progress_bar.progress((i + 1) / len(tickers))
+            progress.progress((i + 1) / len(tickers))
         
-        progress_bar.empty()
+        progress.empty()
 
-        if strategies:
-            df_display = pd.DataFrame([s['info'] for s in strategies])
-            # 預設用分數排序，但可以看潛力
-            df_display = df_display.sort_values(by='score', ascending=False)
+        if results:
+            df_res = pd.DataFrame([r['info'] for r in results])
+            df_res = df_res.sort_values(by='potential', ascending=False)
             
-            col_left, col_right = st.columns([2, 1])
+            col1, col2 = st.columns([2, 1])
             
-            with col_left:
-                st.subheader("📋 交易決策總表")
+            with col1:
+                st.subheader("🏆 年度潛力排行榜")
                 
-                def style_potential(v):
-                    if v > 50: return 'color: #00FF00; font-weight: bold' # 高潛力
-                    if v < 0: return 'color: #FF5252' # 趨勢向下
-                    return 'color: white'
+                def style_pot(v):
+                    if v > 50: return 'color: #00FF00; font-weight: bold'
+                    if v < 0: return 'color: #FF5252'
+                    return ''
 
+                # 關鍵修改：errors='ignore' 防止 KeyError
                 st.dataframe(
-                    df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi']),
+                    df_res.drop(columns=['ticker_code', 'mfi', 'sell_note', 'score'], errors='ignore'),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "id": st.column_config.TextColumn("名稱", width="small"),
+                        "id": st.column_config.TextColumn("股票", width="small"),
                         "price": st.column_config.NumberColumn("現價", format="%.1f", width="small"),
-                        # 這是 v6.0 的精華：年化潛力
-                        "potential": st.column_config.NumberColumn("🔥 年化潛力", format="%+.1f%%", help="預估一年後漲幅潛力"),
-                        "signal": st.column_config.TextColumn("AI 判斷", width="medium"),
+                        "potential": st.column_config.NumberColumn("🔥 年化潛力", format="%+.1f%%"),
+                        "fair_value": st.column_config.NumberColumn("💰 合理價", format="%.1f"),
+                        "upside": st.column_config.NumberColumn("空間%", format="%+.1f%%"),
+                        "signal": st.column_config.TextColumn("訊號", width="medium"),
                         "buy": st.column_config.NumberColumn("🎯 買點", format="%.1f"),
                         "stop": st.column_config.NumberColumn("🛑 停損", format="%.1f"),
-                        "target": st.column_config.NumberColumn("🚀 目標", format="%.1f"),
+                        "kelly": st.column_config.ProgressColumn("倉位", format="%.0f%%", min_value=0, max_value=1),
                         "rsi": st.column_config.NumberColumn("RSI", format="%.1f"),
                     }
                 )
 
-            with col_right:
-                st.subheader("🔍 戰術分析")
-                selected_id = st.selectbox("選擇股票", df_display['id'], key='stock_selector')
-                sel_strategy = next(s for s in strategies if s['info']['id'] == selected_id)
-                info = sel_strategy['info']
+            with col2:
+                st.subheader("📈 趨勢透視")
+                sel_name = st.selectbox("選擇股票", df_res['id'] + " (" + df_res['ticker_code'] + ")")
+                sel_code = sel_name.split("(")[1].replace(")", "")
+                sel_item = next(r for r in results if r['info']['ticker_code'] == sel_code)
+                info = sel_item['info']
                 
                 st.markdown(f"""
                 <div class="info-card">
-                    <h3>{info['id']}</h3>
-                    <p><b>🔥 訊號：</b> {info['signal']}</p>
-                    <p><b>🚀 年化潛力：</b> <span style="color:{'green' if info['potential']>0 else 'red'}">{info['potential']:.1f}%</span></p>
+                    <h3 style="color:#d63384">{info['id']}</h3>
+                    <p><b>🚀 年化潛力：</b> {info['potential']:.1f}%</p>
+                    <p><b>💰 合理估值：</b> {info['fair_value']:.1f}</p>
                     <p><b>🌊 RSI 指標：</b> {info['rsi']:.1f}</p>
                     <hr>
-                    <p><b>🎯 建議買點：</b> <span class="highlight">{info['buy']:.1f}</span></p>
+                    <p><b>💡 策略：</b> {info['signal']}</p>
+                    <p><b>🛒 建議佈局：</b> {info['buy']:.1f}</p>
                     <p><b>🛑 停損防守：</b> {info['stop']:.1f}</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
-                if info['sell_note']:
-                    st.error(f"⚠️ 持有警告：{info['sell_note']}")
-
-                with st.expander("📰 最新新聞", expanded=False):
-                    _, headlines = DataService.get_news_sentiment(info['ticker_code'])
-                    if headlines:
-                        for h in headlines:
-                            st.markdown(f"- [{h['title']}]({h['link']})")
-                    else: st.write("暫無新聞")
-
-            st.markdown("---")
-            if selected_id:
-                fig = draw_chart(sel_strategy['analyzer'])
-                st.plotly_chart(fig, use_container_width=True, key=f"chart_{info['ticker_code']}")
+                fig = draw_chart(sel_item['analyzer'])
+                st.plotly_chart(fig, use_container_width=True)
 
         else:
-            st.error("無法取得數據，請檢查網路連線。")
+            st.error("連線失敗")
 
 if __name__ == "__main__":
     main()
