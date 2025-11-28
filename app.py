@@ -15,7 +15,7 @@ from ta.momentum import RSIIndicator
 from ta.volume import OnBalanceVolumeIndicator, MFIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
-st.set_page_config(page_title="HedgeFund OS | K線放大版", layout="wide", page_icon="🔭")
+st.set_page_config(page_title="HedgeFund OS | 穩定防呆版", layout="wide", page_icon="🛡️")
 
 st.markdown("""
 <style>
@@ -61,7 +61,8 @@ NAME_MAP = {
     "0050.TW": "台灣50", "0056.TW": "高股息", "00878.TW": "國泰永續", "00929.TW": "復華科技", "00919.TW": "群益精選",
     "00940.TW": "元大價值", "006208.TW": "富邦台50", "00980A.TW": "野村趨勢", "00981A.TW": "統一動力", "00982A.TW": "群益強棒",
     "NVDA": "輝達", "TSLA": "特斯拉", "AAPL": "蘋果", "MSFT": "微軟", "GOOG": "谷歌",
-    "AMZN": "亞馬遜", "META": "臉書", "AMD": "超微", "PLTR": "帕蘭泰爾", "SMCI": "美超微", "COIN": "Coinbase", "ARM": "安謀", "MSTR": "微策略", "INTC": "英特爾"
+    "AMZN": "亞馬遜", "META": "臉書", "AMD": "超微", "INTC": "英特爾", "PLTR": "帕蘭泰爾",
+    "SMCI": "美超微", "COIN": "Coinbase"
 }
 
 ALL_TICKERS = [t for s in SECTORS.values() for t in s]
@@ -93,12 +94,12 @@ class DataService:
                 t = entry.title
                 headlines.append({"title": t, "link": entry.link})
                 for w in pos: score += 2
-                for w in neg: score -= 1 # 降低負面權重
+                for w in neg: score -= 1
             return score, headlines
         except: return 0, []
 
 # ==========================================
-# 🧠 分析層 (修正 Bug 版)
+# 🧠 分析層
 # ==========================================
 class QuantAnalyzer:
     def __init__(self, ticker, df):
@@ -116,7 +117,6 @@ class QuantAnalyzer:
         self._add_indicators()
         
     def _add_indicators(self):
-        # 🔴 關鍵修正：使用新的 fillna 語法 (避免 FutureWarning)
         self.df = self.df.ffill().bfill()
 
         self.df['EMA20'] = EMAIndicator(self.close, window=20).ema_indicator()
@@ -136,7 +136,6 @@ class QuantAnalyzer:
         self.df['ATR'] = AverageTrueRange(self.high, self.low, self.close).average_true_range().fillna(0)
 
     def calculate_potential(self):
-        # 計算年化動能 (v6.0 核心)
         try:
             recent = self.close.tail(120)
             if len(recent) < 60: return 0
@@ -148,13 +147,32 @@ class QuantAnalyzer:
             return ((proj - curr) / curr) * 100
         except: return 0
 
+    def calculate_win_rate(self):
+        try:
+            window = self.df.tail(250)
+            ma20 = window['EMA20']
+            price = window['Close']
+            buy_signals = (price > ma20) & (price.shift(1) < ma20.shift(1))
+            wins = 0
+            count = 0
+            for date in buy_signals[buy_signals].index:
+                try:
+                    entry = window.loc[date]['Close']
+                    idx = window.index.get_loc(date) + 5
+                    if idx < len(window):
+                        exit = window.iloc[idx]['Close']
+                        if exit > entry: wins += 1
+                        count += 1
+                except: pass
+            return (wins / count * 100) if count > 0 else 50.0
+        except: return 50.0
+
     def get_valuation(self):
         curr = self.close.iloc[-1]
-        fair_value = self.df['SMA240'].iloc[-1]
-        if pd.isna(fair_value): fair_value = self.close.rolling(120).mean().iloc[-1]
-        if pd.isna(fair_value): fair_value = curr 
-        upside = (fair_value - curr) / curr * 100
-        return fair_value, upside
+        fair = self.df['SMA240'].iloc[-1]
+        if pd.isna(fair): fair = curr
+        upside = (fair - curr) / curr * 100
+        return fair, upside
 
     def get_scores(self):
         t_score = 0
@@ -166,16 +184,13 @@ class QuantAnalyzer:
             mfi = self.df['MFI'].iloc[-1]
             rsi = self.df['RSI'].iloc[-1]
             
-            # 趨勢
             if curr > ema20 > ema60: t_score += 30
             elif curr > ema60: t_score += 15
             
-            # 動能
             if self.df['MACD'].iloc[-1] > self.df['Signal'].iloc[-1]: t_score += 15
             if 50 <= rsi <= 75: t_score += 15
             if mfi > 60: t_score += 20
             
-            # 抄底
             if rsi < 30: r_score += 40
             elif rsi < 40: r_score += 20
             if curr <= self.df['BB_Low'].iloc[-1]: r_score += 30
@@ -183,83 +198,126 @@ class QuantAnalyzer:
         except: pass
         return t_score, r_score
 
+    def calculate_kelly(self):
+        try:
+            window = self.df.tail(120)
+            ret = window['Close'].pct_change().dropna()
+            wins = ret[ret > 0]
+            losses = ret[ret < 0]
+            if len(wins) == 0: return 0
+            win_rate = len(wins) / len(ret)
+            avg_win = wins.mean()
+            avg_loss = abs(losses.mean()) if len(losses) > 0 else 0.01
+            odds = avg_win / avg_loss
+            kelly = (odds * win_rate - (1 - win_rate)) / odds
+            return max(0, min(kelly * 0.5, 0.5))
+        except: return 0
+
 # ==========================================
 # 📝 策略層
 # ==========================================
 def generate_strategy(ticker, df, news_score):
-    analyzer = QuantAnalyzer(ticker, df)
-    curr_price = analyzer.close.iloc[-1]
-    t_score, r_score = analyzer.get_scores()
-    mfi_val = analyzer.df['MFI'].iloc[-1]
-    rsi_val = analyzer.df['RSI'].iloc[-1] 
+    az = QuantAnalyzer(ticker, df)
+    curr = az.close.iloc[-1]
     
-    fair_val, upside = analyzer.get_valuation()
-    potential = analyzer.calculate_potential() # 6.0版動能
+    t_score, r_score = az.get_scores()
+    mfi = az.df['MFI'].iloc[-1]
+    rsi = az.df['RSI'].iloc[-1]
+    
+    fair, upside = az.get_valuation()
+    pot = az.calculate_potential()
+    win_rate = az.calculate_win_rate()
+    kelly = az.calculate_kelly()
     
     total_score = t_score + (news_score * 3)
     
     signal = "⚪ 觀望"
-    buy_price = analyzer.df['BB_Low'].iloc[-1] 
-    
-    ma5 = analyzer.close.rolling(5).mean().iloc[-1]
+    buy = az.df['BB_Low'].iloc[-1] 
+    ma5 = az.close.rolling(5).mean().iloc[-1]
     
     if total_score >= 80:
         signal = "🔥 強力買進"
-        buy_price = curr_price
+        buy = curr
     elif total_score >= 60:
         signal = "🔴 偏多操作"
-        buy_price = ma5 if curr_price > ma5 else curr_price
+        buy = ma5 if curr > ma5 else curr
     elif r_score >= 40:
         signal = "💎 甜蜜抄底"
-        buy_price = analyzer.df['BB_Low'].iloc[-1]
+        buy = az.df['BB_Low'].iloc[-1]
+    
+    # 確認轉強邏輯
+    open_p = az.df['Open'].iloc[-1]
+    is_red = curr > open_p
+    if "多" in signal or "強力" in signal:
+        if is_red and curr >= buy:
+            signal = "✅ 確認轉強"
+            buy = curr
+
+    # 短衝邏輯
+    p5, p10, p20 = "-", "-", "-"
+    try:
+        x = np.arange(len(df.tail(20)))
+        y = df['Close'].tail(20).values
+        s, _ = np.polyfit(x, y, 1)
+        
+        if s > -10: 
+            p5_v = curr + s*5
+            p10_v = curr + s*10
+            p5 = f"{p5_v:.1f}"
+            p10 = f"{p10_v:.1f}"
+            p20 = f"{curr + s*20:.1f}"
+            
+            if p10_v > p5_v > curr and mfi > 60 and win_rate > 60:
+                 if "觀望" not in signal and "有雷" not in signal:
+                     signal += " 🚀短衝"
+    except: pass
     
     if news_score <= -3:
         signal = "⚠️ 風險警示"
-        buy_price = 0 
+        buy = 0
+        p5 = p10 = p20 = "-"
     
-    atr = analyzer.df['ATR'].iloc[-1]
-    stop_loss = curr_price - (2.5 * atr) if buy_price > 0 else 0
-    target_1 = curr_price + (3 * atr)
+    atr = az.df['ATR'].iloc[-1]
+    stop = curr - (2.5 * atr) if buy > 0 else 0
+    target = curr + (3 * atr)
     
     sell_note = ""
-    if stop_loss > 0 and curr_price < stop_loss: sell_note = "🛑 破線快逃"
-    elif rsi_val > 75: sell_note = "⚠️ 過熱減碼"
+    if stop > 0 and curr < stop: sell_note = "🛑 破線快逃"
+    elif rsi > 75: sell_note = "⚠️ 過熱減碼"
 
     return {
         "info": {
-            "id": analyzer.display_name,
+            "id": az.display_name,
             "ticker_code": ticker,
-            "price": curr_price,
-            "fair_value": fair_val,
+            "price": curr,
+            "win_rate": win_rate,
             "upside": upside,
-            "potential": potential, # 加入潛力
+            "potential": pot,
             "signal": signal,
-            "buy": buy_price,
-            "stop": stop_loss,
-            "target": target_1,
-            "rsi": rsi_val,
+            "buy": buy,
+            "stop": stop,
+            "target": target,
+            "rsi": rsi,
             "score": max(total_score, r_score),
-            "mfi": mfi_val,
-            "sell_note": sell_note
+            "mfi": mfi,
+            "kelly": kelly,
+            "fair_value": fair, # 補回
+            "sell_note": sell_note,
+            "5日": p5, "10日": p10, "20日": p20
         },
-        "analyzer": analyzer
+        "analyzer": az
     }
 
 # ==========================================
-# 🎨 視覺層 (K線放大版)
+# 🎨 視覺層
 # ==========================================
 def draw_chart(analyzer):
-    # 🔴 關鍵修正：只畫最近 80 天，讓 K 線變大變清楚
-    df = analyzer.df.tail(80)
-    
+    df = analyzer.df.tail(80) # 放大K線
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
-    # 布林通道
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_High'], line=dict(width=0), showlegend=False), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 255, 255, 0.05)', name='布林通道'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_Low'], line=dict(color='#00FFFF', width=1.5, dash='dot'), name='地板'), row=1, col=1)
-    
-    # K線
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
     
     if 'EMA20' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#FFD700', width=1), name='月線'), row=1, col=1)
@@ -269,7 +327,7 @@ def draw_chart(analyzer):
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
     
     fig.update_xaxes(tickformat="%Y/%m")
-    fig.update_layout(title=f"<b>{analyzer.display_name}</b> 技術分析 (近3個月)", yaxis_title='價格', xaxis_rangeslider_visible=False, height=600, template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.02, x=0, xanchor="left"))
+    fig.update_layout(title=f"<b>{analyzer.display_name}</b> 技術分析", yaxis_title='價格', xaxis_rangeslider_visible=False, height=600, template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.02, x=0, xanchor="left"))
     return fig
 
 # ==========================================
@@ -327,18 +385,21 @@ def main():
                     return 'color: white'
 
                 st.dataframe(
-                    df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi', 'fair_value', 'upside', 'kelly']), # 隱藏詳細數據，只留關鍵
+                    # ⚠️ 這裡加上 errors='ignore' 保護，並移除不需要顯示的欄位
+                    df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi', 'kelly', 'potential', 'fair_value', 'upside'], errors='ignore'),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
                         "id": st.column_config.TextColumn("名稱", width="small"),
                         "price": st.column_config.NumberColumn("現價", format="%.1f", width="small"),
-                        "potential": st.column_config.NumberColumn("🔥 年化動能", format="%+.1f%%", help="預估一年後漲幅潛力 (動能)"),
+                        "win_rate": st.column_config.ProgressColumn("🎲 勝率%", format="%.0f%%", min_value=0, max_value=100),
                         "signal": st.column_config.TextColumn("AI 判斷", width="medium"),
                         "buy": st.column_config.NumberColumn("🎯 買點", format="%.1f"),
                         "stop": st.column_config.NumberColumn("🛑 停損", format="%.1f"),
                         "target": st.column_config.NumberColumn("🚀 目標", format="%.1f"),
                         "rsi": st.column_config.NumberColumn("RSI", format="%.1f"),
+                        "5日": st.column_config.TextColumn("5日預測", width="small"),
+                        "10日": st.column_config.TextColumn("10日預測", width="small"),
                     }
                 )
 
@@ -352,9 +413,11 @@ def main():
                 <div class="info-card">
                     <h3>{info['id']}</h3>
                     <p><b>🔥 訊號：</b> {info['signal']}</p>
+                    <p><b>🎲 歷史勝率：</b> {info['win_rate']:.1f}%</p>
                     <p><b>💰 合理估值：</b> {info['fair_value']:.1f}</p>
-                    <p><b>📈 潛在空間：</b> <span style="color:{'green' if info['upside']>0 else 'red'}">{info['upside']:.1f}%</span></p>
                     <p><b>🌊 RSI 指標：</b> {info['rsi']:.1f}</p>
+                    <p><b>💰 5日預測：</b> {info['5日']}</p>
+                    <p><b>💰 10日預測：</b> {info['10日']}</p>
                     <hr>
                     <p><b>🎯 建議買點：</b> <span class="highlight">{info['buy']:.1f}</span></p>
                     <p><b>🛑 停損防守：</b> {info['stop']:.1f}</p>
