@@ -15,7 +15,7 @@ from ta.momentum import RSIIndicator
 from ta.volume import OnBalanceVolumeIndicator, MFIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 
-st.set_page_config(page_title="HedgeFund OS | 終極防呆版", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="HedgeFund OS | 標準名稱版", layout="wide", page_icon="🏷️")
 
 st.markdown("""
 <style>
@@ -33,8 +33,38 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 📋 股票清單
+# 📋 股票清單與對照表 (完整補齊)
 # ==========================================
+NAME_MAP = {
+    # 電子權值
+    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
+    "2303.TW": "聯電", "3711.TW": "日月光", "3008.TW": "大立光", "3045.TW": "台灣大",
+    # AI 供應鏈
+    "3231.TW": "緯創", "2356.TW": "英業達", "6669.TW": "緯穎", "2382.TW": "廣達",
+    "2376.TW": "技嘉", "3017.TW": "奇鋐", "2421.TW": "建準", "3035.TW": "智原",
+    "3443.TW": "創意", "3317.TW": "尼克森", "6414.TW": "樺漢", "6962.TW": "AMAX",
+    # 光電與顯示
+    "3481.TW": "群創", "2409.TW": "友達", "3034.TW": "聯詠", "4961.TW": "天鈺",
+    "3545.TW": "敦泰", "8016.TW": "矽創", "6668.TW": "中揚光", "3673.TW": "宸鴻",
+    # 重電與綠能
+    "1513.TW": "中興電", "1519.TW": "華城", "1503.TW": "士電", "1504.TW": "東元",
+    "1609.TW": "大亞", "1605.TW": "華新", "6806.TW": "森崴", "9958.TW": "世紀鋼",
+    # 航運與傳產
+    "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航",
+    "2610.TW": "華航", "2002.TW": "中鋼", "1101.TW": "台泥", "1301.TW": "台塑", "1303.TW": "南亞",
+    # 金融護城河
+    "2881.TW": "富邦金", "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金",
+    "5880.TW": "合庫金", "2884.TW": "玉山金", "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金",
+    # 熱門 ETF
+    "0050.TW": "台灣50", "0056.TW": "高股息", "00878.TW": "國泰永續", "00929.TW": "復華科技",
+    "00919.TW": "群益精選", "00940.TW": "元大價值", "006208.TW": "富邦台50",
+    "00980A.TW": "野村趨勢", "00981A.TW": "統一動力", "00982A.TW": "群益強棒", "00983A.TW": "中信ARK",
+    # 美股
+    "NVDA": "輝達", "TSLA": "特斯拉", "AAPL": "蘋果", "MSFT": "微軟",
+    "GOOG": "谷歌", "AMZN": "亞馬遜", "META": "臉書", "AMD": "超微",
+    "INTC": "英特爾", "PLTR": "帕蘭泰爾", "SMCI": "美超微", "COIN": "Coinbase"
+}
+
 SECTORS = {
     "🚀 電子權值": ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2303.TW", "3711.TW", "3008.TW", "3045.TW"],
     "🤖 AI 供應鏈": ["3231.TW", "2356.TW", "6669.TW", "2382.TW", "2376.TW", "3017.TW", "2421.TW", "3035.TW", "3443.TW", "3317.TW", "6414.TW", "6962.TW"],
@@ -44,24 +74,6 @@ SECTORS = {
     "🏦 金融護城河": ["2881.TW", "2882.TW", "2891.TW", "2886.TW", "2884.TW", "5880.TW", "2892.TW", "2880.TW", "2885.TW"],
     "📊 熱門 ETF": ["0050.TW", "0056.TW", "00878.TW", "00929.TW", "00919.TW", "00940.TW", "006208.TW", "00980A.TW", "00981A.TW", "00982A.TW"],
     "🇺🇸 美股七雄+": ["NVDA", "TSLA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "AMD", "INTC", "PLTR", "SMCI", "COIN"]
-}
-
-NAME_MAP = {
-    "2330.TW": "台積電", "2454.TW": "聯發科", "3711.TW": "日月光", "3661.TW": "世芯-KY", "3443.TW": "創意",
-    "2317.TW": "鴻海", "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
-    "2376.TW": "技嘉", "3017.TW": "奇鋐", "2421.TW": "建準", "6962.TW": "AMAX",
-    "1513.TW": "中興電", "1519.TW": "華城", "1503.TW": "士電", "1504.TW": "東元", "1609.TW": "大亞", "1605.TW": "華新", "6806.TW": "森崴", "9958.TW": "世紀鋼",
-    "3008.TW": "大立光", "3406.TW": "玉晶光", "3529.TW": "力旺", "3035.TW": "智原", "6531.TW": "愛普", "3227.TW": "原相", "8069.TW": "元太",
-    "3481.TW": "群創", "2409.TW": "友達", "3034.TW": "聯詠", "4961.TW": "天鈺", "3545.TW": "敦泰", "8016.TW": "矽創", "6668.TW": "中揚光", "3673.TW": "宸鴻",
-    "3317.TW": "尼克森", "6414.TW": "樺漢",
-    "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航", "2610.TW": "華航",
-    "2002.TW": "中鋼", "1101.TW": "台泥", "1301.TW": "台塑", "1303.TW": "南亞", 
-    "2881.TW": "富邦金", "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "5880.TW": "合庫金",
-    "2884.TW": "玉山金", "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金",
-    "0050.TW": "台灣50", "0056.TW": "高股息", "00878.TW": "國泰永續", "00929.TW": "復華科技", "00919.TW": "群益精選",
-    "00940.TW": "元大價值", "006208.TW": "富邦台50", "00980A.TW": "野村趨勢", "00981A.TW": "統一動力", "00982A.TW": "群益強棒",
-    "NVDA": "輝達", "TSLA": "特斯拉", "AAPL": "蘋果", "MSFT": "微軟", "GOOG": "谷歌",
-    "AMZN": "亞馬遜", "META": "臉書", "AMD": "超微", "PLTR": "帕蘭泰爾", "SMCI": "美超微", "COIN": "Coinbase", "ARM": "安謀", "MSTR": "微策略", "INTC": "英特爾"
 }
 
 ALL_TICKERS = [t for s in SECTORS.values() for t in s]
@@ -81,7 +93,7 @@ class DataService:
     def get_news_sentiment(ticker):
         name = NAME_MAP.get(ticker, ticker.replace(".TW", ""))
         encoded = urllib.parse.quote(name)
-        rss = f"https://news.google.com/rss/search?q={encoded}+when:7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        rss = f"https://news.google.com/rss/search?q={encoded}+when:2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
         try:
             feed = feedparser.parse(rss)
             if not feed.entries: return 0, []
@@ -93,7 +105,7 @@ class DataService:
                 t = entry.title
                 headlines.append({"title": t, "link": entry.link})
                 for w in pos: score += 2
-                for w in neg: score -= 3
+                for w in neg: score -= 1
             return score, headlines
         except: return 0, []
 
@@ -105,11 +117,11 @@ class QuantAnalyzer:
         self.ticker = ticker
         self.df = df.dropna(how='all').copy()
         self.close = self.df['Close']
-        self.open = self.df['Open']
         self.high = self.df['High']
         self.low = self.df['Low']
         self.volume = self.df['Volume']
         
+        # 🔴 這裡強制設定顯示名稱格式：代號 + 公司名
         cn_name = NAME_MAP.get(ticker, "")
         clean_ticker = ticker.replace(".TW", "")
         self.display_name = f"{clean_ticker} {cn_name}"
@@ -117,7 +129,8 @@ class QuantAnalyzer:
         self._add_indicators()
         
     def _add_indicators(self):
-        self.df = self.df.ffill().bfill()
+        self.df.fillna(method='bfill', inplace=True)
+        self.df.fillna(method='ffill', inplace=True)
 
         self.df['EMA20'] = EMAIndicator(self.close, window=20).ema_indicator()
         self.df['EMA60'] = EMAIndicator(self.close, window=60).ema_indicator()
@@ -205,15 +218,13 @@ class QuantAnalyzer:
 def generate_strategy(ticker, df, news_score):
     analyzer = QuantAnalyzer(ticker, df)
     curr_price = analyzer.close.iloc[-1]
-    open_price = analyzer.open.iloc[-1]
-    
     t_score, r_score = analyzer.get_scores()
     mfi_val = analyzer.df['MFI'].iloc[-1]
-    rsi_val = analyzer.df['RSI'].iloc[-1]
+    rsi_val = analyzer.df['RSI'].iloc[-1] 
     
     fair_val, upside = analyzer.get_valuation()
-    win_rate = analyzer.calculate_win_rate()
     pot = analyzer.calculate_potential()
+    win_rate = analyzer.calculate_win_rate()
     
     total_score = t_score + (news_score * 3)
     
@@ -221,8 +232,6 @@ def generate_strategy(ticker, df, news_score):
     buy_price = analyzer.df['BB_Low'].iloc[-1] 
     
     ma5 = analyzer.close.rolling(5).mean().iloc[-1]
-    
-    is_red_candle = curr_price > open_price
     
     if total_score >= 80:
         signal = "🔥 強力買進"
@@ -234,8 +243,11 @@ def generate_strategy(ticker, df, news_score):
         signal = "💎 甜蜜抄底"
         buy_price = analyzer.df['BB_Low'].iloc[-1]
     
+    # 轉強確認
+    open_p = analyzer.df['Open'].iloc[-1]
+    is_red = curr_price > open_p
     if "多" in signal or "強力" in signal:
-        if is_red_candle and curr_price >= buy_price:
+        if is_red and curr_price >= buy_price:
             signal = "✅ 確認轉強"
             buy_price = curr_price
 
@@ -276,9 +288,10 @@ def generate_strategy(ticker, df, news_score):
             "id": analyzer.display_name,
             "ticker_code": ticker,
             "price": curr_price,
-            "win_rate": win_rate,
-            "upside": upside,
             "potential": pot,
+            "win_rate": win_rate,
+            "fair_value": fair_val,
+            "upside": upside,
             "signal": signal,
             "buy": buy_price,
             "stop": stop_loss,
@@ -287,8 +300,7 @@ def generate_strategy(ticker, df, news_score):
             "score": max(total_score, r_score),
             "mfi": mfi_val,
             "sell_note": sell_note,
-            "5日": p5, "10日": p10, "20日": p20,
-            "fair_value": fair_val # 確保這個欄位存在
+            "5日": p5, "10日": p10, "20日": p20
         },
         "analyzer": analyzer
     }
@@ -307,6 +319,7 @@ def draw_chart(analyzer):
     
     if 'EMA20' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#FFD700', width=1), name='月線'), row=1, col=1)
     if 'EMA60' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['EMA60'], line=dict(color='#00BFFF', width=1), name='季線'), row=1, col=1)
+    if 'SMA240' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['SMA240'], line=dict(color='#FFFFFF', width=1.5, dash='dash'), name='年線'), row=1, col=1)
     
     colors = ['#ef5350' if o - c >= 0 else '#26a69a' for o, c in zip(df['Open'], df['Close'])]
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
@@ -320,10 +333,10 @@ def draw_chart(analyzer):
 # ==========================================
 def main():
     with st.sidebar:
-        st.header("💎 HedgeFund OS")
+        st.header("🎛️ HedgeFund OS")
         selected_sector = st.radio("選擇板塊", list(SECTORS.keys()))
 
-    st.title(f"🚀 {selected_sector} - 戰情室")
+    st.title(f"🏛️ {selected_sector} - 戰情室")
 
     with st.spinner(f'正在下載 {selected_sector} 數據...'):
         tickers = SECTORS[selected_sector]
@@ -364,9 +377,13 @@ def main():
             with col_left:
                 st.subheader("📋 交易決策總表")
                 
-                # 🔴 關鍵修正：加上 errors='ignore' 並且不刪除不存在的欄位
+                def style_upside(v):
+                    if v > 10: return 'color: #00FF00; font-weight: bold'
+                    if v < -10: return 'color: #FF5252'
+                    return 'color: white'
+
                 st.dataframe(
-                    df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi', 'fair_value', 'upside'], errors='ignore'),
+                    df_display.drop(columns=['ticker_code', 'score', 'sell_note', 'mfi', 'kelly', 'fair_value', 'upside'], errors='ignore'),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -395,6 +412,8 @@ def main():
                     <h3>{info['id']}</h3>
                     <p><b>🔥 訊號：</b> {info['signal']}</p>
                     <p><b>🚀 年化潛力：</b> <span style="color:{'green' if info['potential']>0 else 'red'}">{info['potential']:.1f}%</span></p>
+                    <p><b>💰 合理估值：</b> {info['fair_value']:.1f}</p>
+                    <p><b>📈 潛在空間：</b> <span style="color:{'green' if info['upside']>0 else 'red'}">{info['upside']:.1f}%</span></p>
                     <p><b>🌊 RSI 指標：</b> {info['rsi']:.1f}</p>
                     <p><b>💰 5日預測：</b> {info['5日']}</p>
                     <p><b>💰 10日預測：</b> {info['10日']}</p>
